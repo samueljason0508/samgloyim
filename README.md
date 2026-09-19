@@ -19,8 +19,6 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - Account filters and an account-to-category flow diagram inspired by the PDF.
 - Add, edit, delete, and search expenses and income; category and type filters.
 - Create and edit local accounts with opening balances.
-- Category budgets with remaining amounts and overspend states.
-- Savings goals with editable targets and progress.
 - Receipt OCR from multiple Photos or Files images. Every reading must be opened, checked, and saved before import. OCR reads merchant, date, and receipt total; it does not itemize mixed-category receipts.
 - Photograph a receipt and match it to a card purchase. The total must equal a purchase exactly; a near miss is never rounded onto the closest one. When nothing matches, several purchases tie, or the suggestion is wrong, you pick the purchase yourself — or save the receipt as a new one.
 - CSV import with review, row-level validation, inferred categories, and possible duplicate detection. Invalid rows are listed; they are never silently imported.
@@ -69,13 +67,13 @@ xcrun simctl addmedia booted Samples/receipt_trader_joes.png
 
 ## Data and scope
 
-All amounts are integer cents in USD. Budgets repeat across months and cover all accounts; changing a budget updates the recurring limit. Income is excluded from spending totals. Unbudgeted categories still count toward overall spending. Recorded account balances use all transactions and the opening balance, rather than a live bank balance.
+All amounts are integer cents in USD. Income is excluded from spending totals. Recorded account balances use all transactions and the opening balance, rather than a live bank balance. There are no budgets or savings goals; the app tracks what you spent, not what you planned to.
 
-Savings progress is manually tracked and does not move money or affect account balances. Receipt images are processed with Apple's on-device Vision text recognition; the app keeps reviewed fields and extracted text, not the original image. There is no camera capture screen; import existing photos or image files.
+Receipt images are processed with Apple's on-device Vision text recognition; the app keeps reviewed fields and extracted text, not the original image.
 
-This version does **not** connect to Plaid, Apple Wallet, banks, Google Sheets accounts, or Excel accounts; it does not read `.xlsx` directly. Live financial-data connections would require their own credentials and backend. Location-based merchant discounts are not implemented because they require a real offer database and location service. Insights are deterministic calculations; lessons are written content, not an AI chat service. There is no fraud detection or App Store deployment in this project.
+Bank sync goes through Plaid and requires the local backend in `backend/` and your own Plaid credentials; connections are read-only and scoped to transactions. This version does **not** connect to Apple Wallet, Google Sheets accounts, or Excel accounts; it does not read `.xlsx` directly. Location-based merchant discounts are not implemented because they require a real offer database and location service. Insights are deterministic calculations; lessons are written content, not an AI chat service. There is no fraud detection or App Store deployment in this project.
 
-Transactions, accounts, budgets, and goals persist locally. Deleting the app deletes its data. CSV export includes transactions, not a full backup of budgets, goals, and opening balances.
+Transactions and accounts persist locally. Deleting the app deletes its data. CSV export includes transactions, not a full backup of opening balances.
 
 ## Development and tests
 
@@ -96,9 +94,9 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 `DEVELOPER_DIR` selects Xcode for that command only; it doesn't change the Mac's global command-line tools setting.
 
-Unit tests cover exact cents, CSV quoting and validation, exports, duplicate boundaries, OCR extraction, persistence, category budgets, account filtering, savings, and corrupt-data preservation. UI tests cover transaction creation/editing/deletion and relaunch persistence, duplicate import review, budgets, savings goals, account creation, fresh starts, and navigation. UI tests use a separate data file and don't reset your normal app data.
+Unit tests cover exact cents, CSV quoting and validation, exports, duplicate boundaries, OCR extraction, receipt-to-purchase matching, persistence and schema migration, account and month filtering, and corrupt-data preservation. UI tests cover transaction creation/editing/deletion and relaunch persistence, duplicate import review, receipt scanning and manual mapping, account creation, fresh starts, and navigation. UI tests use a separate data file and don't reset your normal app data.
 
-Verified on iPhone 16 Pro / iOS 18.6: the simulator build, 14 unit tests, and all 5 UI flows passed. The budget/goal flow passed in a focused rerun after correcting automated cursor placement. Screenshots of the running app are in `Screenshots/`.
+Verified on iPhone 16 Pro / iOS 18.6: the simulator build, 21 unit tests, and all 6 UI flows passed. Screenshots of the running app are in `Screenshots/`.
 
 ## Implementation references
 

@@ -1,9 +1,9 @@
 import SwiftUI
 
 enum AppTab: String, CaseIterable {
-    case overview = "Overview", activity = "Activity", plan = "Plan", insights = "Insights"
+    case overview = "Overview", activity = "Activity", insights = "Insights"
     var symbol: String {
-        switch self { case .overview: "square.grid.2x2"; case .activity: "arrow.left.arrow.right"; case .plan: "chart.pie"; case .insights: "sparkles" }
+        switch self { case .overview: "square.grid.2x2"; case .activity: "arrow.left.arrow.right"; case .insights: "sparkles" }
     }
 }
 
@@ -19,9 +19,8 @@ struct RootView: View {
         VStack(spacing: 0) {
             Group {
                 switch tab {
-                case .overview: NavigationStack { OverviewView(add: { sheet = .transaction }, imports: { sheet = .imports }, settings: { sheet = .settings }, showActivity: { tab = .activity }, showPlan: { tab = .plan }) }
+                case .overview: NavigationStack { OverviewView(add: { sheet = .transaction }, imports: { sheet = .imports }, settings: { sheet = .settings }, showActivity: { tab = .activity }) }
                 case .activity: NavigationStack { ActivityView(add: { sheet = .transaction }, imports: { sheet = .imports }) }
-                case .plan: NavigationStack { PlanView() }
                 case .insights: NavigationStack { InsightsView() }
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)

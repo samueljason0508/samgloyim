@@ -83,7 +83,7 @@ struct SettingsView: View {
                 .confirmationDialog(resetAction == .empty ? "Start with a clean slate?" : "Replace everything with sample data?", isPresented: Binding(get: { resetAction != nil }, set: { if !$0 { resetAction = nil } }), titleVisibility: .visible) {
                     Button(resetAction == .empty ? "Clear data and start fresh" : "Replace with sample data", role: .destructive) { if let resetAction, store.reset(useDemo: resetAction == .demo) { self.resetAction = nil; dismiss() } }
                     Button("Cancel", role: .cancel) { resetAction = nil }
-                } message: { Text("This removes existing transactions, accounts, budgets, and goals. Export any transactions you want to keep first.") }
+                } message: { Text("This removes existing transactions and accounts. Export any transactions you want to keep first.") }
                 .fileExporter(isPresented: $export, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "samgloyim-transactions") { result in
                     if case .failure(let error) = result { exportError = error.localizedDescription }
                 }

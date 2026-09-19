@@ -147,7 +147,7 @@ struct ImportView: View {
         VStack(spacing: 20) {
             Image(systemName: "checkmark").font(.system(size: 35, weight: .light)).frame(width: 94, height: 94).background(Palette.sage, in: Circle())
             Text("All settled.").font(.system(size: 36, design: .serif))
-            Text("\(count) transaction\(count == 1 ? " is" : "s are") now part of your picture. Your charts and budgets have been updated.").font(.system(size: 15)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).lineSpacing(4)
+            Text("\(count) transaction\(count == 1 ? " is" : "s are") now part of your picture. Your charts have been updated.").font(.system(size: 15)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).lineSpacing(4)
             PrimaryButton(title: "Back to my money") { dismiss() }
         }.padding(.vertical, 50).frame(maxWidth: .infinity)
     }

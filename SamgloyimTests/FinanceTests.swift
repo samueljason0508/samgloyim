@@ -217,33 +217,33 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(FinanceStore(fileURL: url).data.transactions.count, 1)
     }
 
-    @MainActor func testBudgetsUseAllAccountsAndIncomeIsExcluded() throws {
+    @MainActor func testSpendingIsFilteredByAccountAndMonthAndExcludesIncome() throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FinanceStore(fileURL: url, demo: false)
         let first = try XCTUnwrap(store.data.accounts.first)
         let second = BankAccount(name: "Cash", detail: "")
         XCTAssertTrue(store.saveAccount(second))
-        XCTAssertTrue(store.saveBudget(category: .food, limit: 10000))
         XCTAssertTrue(store.add([Transaction(merchant: "A", amount: 1000, date: Date(), category: .food, accountID: first.id), Transaction(merchant: "B", amount: 2500, date: Date(), category: .food, accountID: second.id), Transaction(merchant: "Pay", amount: 50000, date: Date(), category: .other, accountID: first.id, kind: .income)]))
         store.selectedAccountID = first.id
         XCTAssertEqual(store.spent, 1000)
-        XCTAssertEqual(store.spent(in: .food), 3500)
-        XCTAssertEqual(store.remainingBudget, 6500)
+        XCTAssertEqual(store.income, 50000)
+        store.selectedAccountID = nil
+        XCTAssertEqual(store.spent, 3500)
+        XCTAssertEqual(store.categoryTotals.first { $0.category == .food }?.amount, 3500)
         store.moveMonth(-1)
         XCTAssertEqual(store.spent, 0)
-        XCTAssertEqual(store.remainingBudget, 10000)
     }
 
-    @MainActor func testGoalTrackingDoesNotMoveMoneyAndResetClearsEverything() throws {
+    @MainActor func testResetClearsEverything() throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FinanceStore(fileURL: url, demo: false)
-        XCTAssertTrue(store.saveGoal(SavingsGoal(name: "Trip", target: 100000, saved: 30000)))
-        XCTAssertEqual(store.data.goals.count, 1)
-        XCTAssertTrue(store.data.transactions.isEmpty)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        XCTAssertTrue(store.save(Transaction(merchant: "Lunch", amount: 1200, date: Date(), category: .food, accountID: account.id)))
+        XCTAssertEqual(store.data.transactions.count, 1)
         XCTAssertTrue(store.reset(useDemo: false))
-        XCTAssertTrue(store.data.goals.isEmpty)
+        XCTAssertTrue(store.data.transactions.isEmpty)
         XCTAssertFalse(store.data.isDemo)
         XCTAssertEqual(store.data.accounts.count, 1)
     }

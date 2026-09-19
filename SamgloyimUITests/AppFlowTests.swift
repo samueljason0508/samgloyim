@@ -86,26 +86,6 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sample Campus Café"].waitForExistence(timeout: 5))
     }
 
-    func testBudgetAndSavingsGoalCanBeUpdated() {
-        tap(app.buttons["tab-Plan"])
-        XCTAssertTrue(app.staticTexts["Little by little."].waitForExistence(timeout: 5))
-        screenshot("Plan before edit")
-        tap(app.buttons["budget-Home & bills"])
-        XCTAssertTrue(app.textFields["budget-amount"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textFields["budget-amount"].value as? String, "700.00")
-        fill("budget-amount", "800.00")
-        tap(app.buttons["save-budget"])
-        XCTAssertTrue(app.staticTexts["of $800"].waitForExistence(timeout: 5))
-        tap(app.buttons["plan-Savings goals"])
-        tap(app.buttons["Add savings goal"])
-        fill("goal-name", "Test adventure")
-        fill("goal-target", "500.00")
-        fill("goal-saved", "100.00")
-        tap(app.buttons["save-goal"])
-        tap(app.buttons["goal-Test adventure"])
-        XCTAssertEqual(app.textFields["goal-saved"].value as? String, "100.00")
-    }
-
     func testFreshStartAndAccountCreation() {
         tap(app.buttons["Settings"])
         revealInList(app.buttons["start-fresh"])
@@ -168,8 +148,6 @@ final class AppFlowTests: XCTestCase {
         screenshot("Overview")
         tap(app.buttons["tab-Activity"])
         screenshot("Activity")
-        tap(app.buttons["tab-Plan"])
-        screenshot("Budgets")
         tap(app.buttons["tab-Insights"])
         screenshot("Insights")
         tap(app.buttons["category-Home & bills"])

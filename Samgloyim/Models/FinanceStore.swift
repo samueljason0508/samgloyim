@@ -44,15 +44,9 @@ final class FinanceStore: ObservableObject {
     var expenses: [Transaction] { filteredTransactions.filter { $0.kind == .expense } }
     var spent: Int { expenses.reduce(0) { $0 + $1.amount } }
     var income: Int { filteredTransactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount } }
-    var budgetTotal: Int { data.budgets.reduce(0) { $0 + $1.limit } }
-    var totalMonthlySpending: Int { transactions(in: selectedMonth).filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount } }
-    var remainingBudget: Int { budgetTotal - totalMonthlySpending }
     var categoryTotals: [(category: SpendingCategory, amount: Int)] {
         SpendingCategory.allCases.map { category in (category, expenses.filter { $0.category == category }.reduce(0) { $0 + $1.amount }) }
             .filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }
-    }
-    func spent(in category: SpendingCategory) -> Int {
-        transactions(in: selectedMonth).filter { $0.kind == .expense && $0.category == category }.reduce(0) { $0 + $1.amount }
     }
     func account(_ id: UUID) -> BankAccount? { data.accounts.first { $0.id == id } }
     func balance(_ account: BankAccount) -> Int {
@@ -118,19 +112,6 @@ final class FinanceStore: ObservableObject {
             else { data.accounts.append(account) }
         }
     }
-    @discardableResult func saveBudget(category: SpendingCategory, limit: Int) -> Bool {
-        update { data in
-            data.budgets.removeAll { $0.category == category }
-            if limit > 0 { data.budgets.append(Budget(category: category, limit: limit)) }
-        }
-    }
-    @discardableResult func saveGoal(_ goal: SavingsGoal) -> Bool {
-        update { data in
-            if let index = data.goals.firstIndex(where: { $0.id == goal.id }) { data.goals[index] = goal }
-            else { data.goals.append(goal) }
-        }
-    }
-    @discardableResult func deleteGoal(_ id: UUID) -> Bool { update { $0.goals.removeAll { $0.id == id } } }
     @discardableResult func setName(_ name: String) -> Bool { update { $0.name = name.isEmpty ? "friend" : name } }
     @discardableResult func reset(useDemo: Bool) -> Bool {
         let result = update { $0 = useDemo ? .sample() : .empty() }

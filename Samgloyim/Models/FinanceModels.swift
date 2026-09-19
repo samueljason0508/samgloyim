@@ -120,20 +120,6 @@ struct Transaction: Identifiable, Codable, Equatable {
     var receipt: ReceiptAttachment?
 }
 
-struct Budget: Identifiable, Codable, Equatable {
-    var category: SpendingCategory
-    var limit: Int
-    var id: String { category.id }
-}
-
-struct SavingsGoal: Identifiable, Codable, Equatable {
-    var id = UUID()
-    var name: String
-    var target: Int
-    var saved: Int
-    var symbol: String = "sun.max.fill"
-}
-
 struct FinanceData: Codable, Equatable {
     /// v2 added `Transaction.receipt`. Older saves decode unchanged because the field is optional.
     static let currentSchemaVersion = 2
@@ -142,8 +128,6 @@ struct FinanceData: Codable, Equatable {
     var name: String = "friend"
     var accounts: [BankAccount] = []
     var transactions: [Transaction] = []
-    var budgets: [Budget] = []
-    var goals: [SavingsGoal] = []
     var isDemo: Bool = false
 
     static func empty() -> Self {
@@ -185,13 +169,7 @@ struct FinanceData: Codable, Equatable {
                     date: calendar.date(byAdding: .day, value: row.2 - 1, to: previous)!, category: row.3, accountID: row.4, source: .sample))
             }
         }
-        return FinanceData(accounts: [checking, student, cash], transactions: transactions,
-            budgets: [Budget(category: .home, limit: 70_000), Budget(category: .groceries, limit: 30_000),
-                      Budget(category: .food, limit: 18_000), Budget(category: .shopping, limit: 15_000),
-                      Budget(category: .transport, limit: 8_000), Budget(category: .education, limit: 15_000),
-                      Budget(category: .fun, limit: 7_000)],
-            goals: [SavingsGoal(name: "Summer in Europe", target: 200_000, saved: 124_000, symbol: "airplane"),
-                    SavingsGoal(name: "Rainy day fund", target: 100_000, saved: 35_000, symbol: "umbrella.fill")], isDemo: true)
+        return FinanceData(accounts: [checking, student, cash], transactions: transactions, isDemo: true)
     }
 }
 

@@ -7,7 +7,6 @@ struct OverviewView: View {
     var imports: () -> Void
     var settings: () -> Void
     var showActivity: () -> Void
-    var showPlan: () -> Void
     @State private var selectedTransaction: Transaction?
 
     var body: some View {
@@ -50,20 +49,6 @@ struct OverviewView: View {
                         }.pocketCard(padding: 16)
                     }
                 }
-                if let goal = store.data.goals.first {
-                    Button(action: showPlan) {
-                        HStack(spacing: 15) {
-                            Image(systemName: goal.symbol).font(.system(size: 25, weight: .light)).frame(width: 57, height: 65).background(Palette.peach, in: RoundedRectangle(cornerRadius: 16))
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("A LITTLE CLOSER").font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(Palette.muted)
-                                Text(goal.name).font(.system(size: 15, weight: .semibold))
-                                ProgressTrack(value: Double(goal.saved) / Double(max(goal.target, 1)), color: Palette.orange)
-                                Text("\(Money.format(goal.saved, decimals: false)) of \(Money.format(goal.target, decimals: false)) saved").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                            }
-                            Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                        }.pocketCard(padding: 17)
-                    }.buttonStyle(.plain)
-                }
                 Text("A little awareness goes a long way.").font(.system(size: 12, design: .serif)).italic().foregroundStyle(Palette.muted).frame(maxWidth: .infinity).padding(.vertical, 8)
             }.padding(.horizontal, 22).padding(.bottom, 22)
         }.pageBackground().toolbar(.hidden, for: .navigationBar)
@@ -96,16 +81,6 @@ struct OverviewView: View {
                 Spacer(minLength: 0)
             }.foregroundStyle(.white)
             sparkline.frame(height: 48).accessibilityLabel("Cumulative monthly spending")
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(store.remainingBudget >= 0 ? "Left in overall budget" : "Over overall budget").font(.system(size: 10)).foregroundStyle(.white.opacity(0.65))
-                    Text(store.budgetTotal > 0 ? Money.format(abs(store.remainingBudget)) : "No budget set").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.lime)
-                }
-                Spacer()
-                Button(action: showPlan) {
-                    HStack(spacing: 7) { Text("Your plan"); Image(systemName: "arrow.up.right") }.font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.ink).padding(.horizontal, 14).padding(.vertical, 11).background(Palette.lime, in: Capsule())
-                }
-            }.padding(.top, 3)
         }.padding(22).background(Palette.forest, in: RoundedRectangle(cornerRadius: 25))
     }
 
