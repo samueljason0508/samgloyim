@@ -91,6 +91,28 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(ReceiptScanner.parse(lines: ["STORE", "BALANCE DUE 15.00"]).amount, 1500)
     }
 
+    func testSyncedBankDatesLandOnTheLocalCalendarDay() throws {
+        let payload = PlaidTransactionPayload(id: "t1", merchant: "Trader Joe's", amountCents: 6842, kind: "expense",
+                                              date: "2026-09-18", category: "GROCERIES", institution: "Test Bank", pending: false)
+        let transaction = payload.toTransaction(accountID: UUID())
+        let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: transaction.date)
+        XCTAssertEqual(parts.year, 2026)
+        XCTAssertEqual(parts.month, 9)
+        // Parsing as UTC would land this on the 17th at 8 PM for anyone west of London.
+        XCTAssertEqual(parts.day, 18)
+        XCTAssertEqual(parts.hour, 0)
+        XCTAssertEqual(parts.minute, 0)
+        XCTAssertNil(transaction.recordedTime, "A bank row has no clock time to show")
+    }
+
+    func testManualEntriesKeepTheirTimeAndImportedOnesDoNot() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        XCTAssertNil(Transaction(merchant: "CSV row", amount: 500, date: day, category: .food, accountID: account).recordedTime)
+        let afternoon = try XCTUnwrap(Calendar.current.date(bySettingHour: 14, minute: 41, second: 0, of: day))
+        XCTAssertNotNil(Transaction(merchant: "Manual", amount: 500, date: afternoon, category: .food, accountID: account).recordedTime)
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))

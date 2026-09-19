@@ -36,11 +36,16 @@ private struct SyncResponse: Decodable {
 /// talks to Plaid's API directly. Backend must be running: `npm start` in `backend/`.
 enum PlaidService {
     static let baseURL = URL(string: "http://localhost:5100")!
+    /// Plaid posts a bare calendar date with no time or zone. Reading it as UTC puts the
+    /// transaction at UTC midnight, which is the *previous* evening anywhere west of London —
+    /// a day-early date that also lands transactions in the wrong month and stops duplicate
+    /// detection matching the same purchase from another source. It is a local calendar day.
     static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.timeZone = .current
         return formatter
     }()
 
