@@ -1,0 +1,5 @@
+date,merchant,amount,category,account,kind,note
+2026-09-18,Campus Cafe,12.50,Food & drink,,expense,Lunch
+2026-09-17,Neighborhood Market,46.82,Groceries,,expense,Weekly groceries
+2026-09-16,Campus job,350.00,Other,,income,Payday
+2026-09-18,Campus Cafe,12.50,Food & drink,,expense,Duplicate example - review before importing

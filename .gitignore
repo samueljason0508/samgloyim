@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcresult
+output/
+
+# Backend secrets — never commit Plaid credentials
+backend/.env
+backend/node_modules/
+*.env
+
