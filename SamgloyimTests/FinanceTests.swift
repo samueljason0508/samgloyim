@@ -103,14 +103,15 @@ final class FinanceTests: XCTestCase {
 
         let timed = PlaidTransactionPayload(id: "t1", merchant: "Chime buy", amountCents: 1200, kind: "expense",
                                             date: "2026-09-13", datetime: "2026-09-13T21:55:52Z", category: nil,
-                                            institution: "Chime", pending: false).toTransaction(accountID: UUID())
+                                            categoryDetailed: nil, institution: "Chime", pending: false).toTransaction(accountID: UUID())
         XCTAssertNotNil(timed.recordedTime, "A bank that sends a clock time should surface one")
         XCTAssertEqual(timed.date, real)
     }
 
     func testSyncedBankDatesLandOnTheLocalCalendarDay() throws {
         let payload = PlaidTransactionPayload(id: "t1", merchant: "Trader Joe's", amountCents: 6842, kind: "expense",
-                                              date: "2026-09-18", datetime: nil, category: "GROCERIES", institution: "Test Bank", pending: false)
+                                              date: "2026-09-18", datetime: nil, category: "GROCERIES",
+                                              categoryDetailed: "GROCERIES_GROCERIES", institution: "Test Bank", pending: false)
         let transaction = payload.toTransaction(accountID: UUID())
         let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: transaction.date)
         XCTAssertEqual(parts.year, 2026)
@@ -152,6 +153,97 @@ final class FinanceTests: XCTestCase {
         var again = data
         FinanceStore.repairSyncedDates(&again)
         XCTAssertEqual(again.transactions[0].date, localMidnight)
+    }
+
+    func testDetailedPlaidCategoryIsPreferredOverTheCatchAllPrimaryOne() {
+        // GENERAL_SERVICES covers tuition, insurance and car servicing alike, so reading only the
+        // primary category files all three under Other.
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_EDUCATION"), .education)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_INSURANCE"), .home)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_AUTOMOTIVE"), .transport)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_STUDENT_LOAN_PAYMENT"), .education)
+        // A detailed value we do not map falls back to the primary rather than guessing.
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GROCERIES", detailed: "GROCERIES_SOMETHING_NEW"), .groceries)
+        XCTAssertNil(SpendingCategory.fromPlaid(primary: nil, detailed: nil))
+    }
+
+    @MainActor func testMovingMoneyBetweenYourOwnAccountsIsNotSpending() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: nil))
+        XCTAssertFalse(SpendingCategory.isTransfer(primary: "FOOD_AND_DRINK", detailed: "FOOD_AND_DRINK_COFFEE"))
+
+        var payment = Transaction(merchant: "Amex payment", amount: 120_000, date: Date(), category: .other, accountID: account.id, source: .plaid)
+        payment.isTransfer = true
+        let lunch = Transaction(merchant: "Campus Cafe", amount: 1200, date: Date(), category: .food, accountID: account.id, source: .plaid)
+        XCTAssertTrue(store.add([payment, lunch]))
+        // A card payoff would otherwise double-count purchases already recorded, and swamp the month.
+        XCTAssertEqual(store.spent, 1200)
+        XCTAssertEqual(store.transfers.count, 1)
+        XCTAssertFalse(store.categoryTotals.contains { $0.category == .other })
+    }
+
+    @MainActor func testSyncEnrichesAPendingRowRatherThanFilingItUnderOtherForever() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        let raw = PlaidTransactionPayload(id: "plaid-1", merchant: "SQ *WB2 1042", amountCents: 1850, kind: "expense",
+                                          date: "2026-09-18", datetime: nil, category: nil, categoryDetailed: nil,
+                                          institution: "Amex", pending: true).toTransaction(accountID: account.id)
+        XCTAssertTrue(store.apply(PlaidSync(added: [raw])))
+        XCTAssertEqual(store.data.transactions.first?.category, .other)
+
+        let posted = PlaidTransactionPayload(id: "plaid-1", merchant: "Whole Foods", amountCents: 1850, kind: "expense",
+                                             date: "2026-09-18", datetime: nil, category: "GROCERIES",
+                                             categoryDetailed: "GROCERIES_GROCERIES", institution: "Amex",
+                                             pending: false).toTransaction(accountID: account.id)
+        XCTAssertTrue(store.apply(PlaidSync(modified: [posted])))
+        XCTAssertEqual(store.data.transactions.count, 1, "A correction must update the row, not add a second one")
+        XCTAssertEqual(store.data.transactions.first?.merchant, "Whole Foods")
+        XCTAssertEqual(store.data.transactions.first?.category, .groceries)
+        XCTAssertEqual(store.data.transactions.first?.note, "Amex")
+
+        // A category the user chose by hand is theirs, and a later sync must not overwrite it.
+        var edited = try XCTUnwrap(store.data.transactions.first)
+        edited.category = .fun
+        XCTAssertTrue(store.save(edited))
+        XCTAssertFalse(store.apply(PlaidSync(modified: [posted])))
+        XCTAssertEqual(store.data.transactions.first?.category, .fun)
+
+        XCTAssertTrue(store.apply(PlaidSync(removed: ["plaid-1"])))
+        XCTAssertTrue(store.data.transactions.isEmpty, "A transaction the bank reversed should not linger")
+    }
+
+    @MainActor func testResyncRepairsBankRowsStoredBeforeIdsWereKept() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let old = Transaction(merchant: "SQ *WB2 1042", amount: 1850, date: day, category: .other, accountID: account.id, source: .plaid, note: "Amex")
+        let manual = Transaction(merchant: "SQ *WB2 1042", amount: 1850, date: day, category: .other, accountID: account.id, source: .manual)
+        XCTAssertTrue(store.add([old, manual]))
+
+        // The bank has since renamed the card descriptor, which is why merchant is not part of the match.
+        let incoming = PlaidTransactionPayload(id: "plaid-1", merchant: "Whole Foods", amountCents: 1850, kind: "expense",
+                                               date: "2026-09-18", datetime: nil, category: "GROCERIES",
+                                               categoryDetailed: "GROCERIES_GROCERIES", institution: "Amex",
+                                               pending: false).toTransaction(accountID: account.id)
+        XCTAssertTrue(store.apply(PlaidSync(added: [incoming])))
+        XCTAssertEqual(store.data.transactions.count, 2, "The replayed row should adopt the stored one, not duplicate it")
+        let repaired = try XCTUnwrap(store.data.transactions.first { $0.source == .plaid })
+        XCTAssertEqual(repaired.id, old.id)
+        XCTAssertEqual(repaired.externalID, "plaid-1")
+        XCTAssertEqual(repaired.category, .groceries)
+        XCTAssertEqual(repaired.merchant, "Whole Foods")
+        // The identical manual entry belongs to the user and is never claimed by a bank.
+        let untouched = try XCTUnwrap(store.data.transactions.first { $0.source == .manual })
+        XCTAssertNil(untouched.externalID)
+        XCTAssertEqual(untouched.category, .other)
     }
 
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {

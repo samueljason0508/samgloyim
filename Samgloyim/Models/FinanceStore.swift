@@ -59,9 +59,10 @@ final class FinanceStore: ObservableObject {
                 && (accountID == nil || $0.accountID == accountID)
         }.sorted { $0.date > $1.date }
     }
-    var expenses: [Transaction] { filteredTransactions.filter { $0.kind == .expense } }
+    var expenses: [Transaction] { filteredTransactions.filter { $0.kind == .expense && $0.isTransfer != true } }
     var spent: Int { expenses.reduce(0) { $0 + $1.amount } }
-    var income: Int { filteredTransactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount } }
+    var income: Int { filteredTransactions.filter { $0.kind == .income && $0.isTransfer != true }.reduce(0) { $0 + $1.amount } }
+    var transfers: [Transaction] { filteredTransactions.filter { $0.isTransfer == true } }
     var categoryTotals: [(category: SpendingCategory, amount: Int)] {
         SpendingCategory.allCases.map { category in (category, expenses.filter { $0.category == category }.reduce(0) { $0 + $1.amount }) }
             .filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }
@@ -139,17 +140,70 @@ final class FinanceStore: ObservableObject {
     func moveMonth(_ offset: Int) {
         selectedMonth = Calendar.current.date(byAdding: .month, value: offset, to: selectedMonth) ?? selectedMonth
     }
-    /// Silently pulls new transactions for any linked bank and merges them in, skipping known duplicates.
-    /// Safe to call often (app launch, foreground) — a cursor-based sync only ever returns what's new.
+    /// Silently pulls changes for any linked bank and merges them in.
+    /// Safe to call often (app launch, foreground) — a cursor-based sync only returns what changed.
     func autoSyncPlaid() async {
         guard let accountID = selectedAccountID ?? data.accounts.first?.id else { return }
         guard let items = try? await PlaidService.fetchLinkedItems(), !items.isEmpty else { return }
-        guard let fetched = try? await PlaidService.fetchNewTransactions(accountID: accountID), !fetched.isEmpty else { return }
-        var accepted: [Transaction] = []
-        for candidate in fetched where duplicate(of: candidate, including: accepted) == nil {
-            accepted.append(candidate)
+        guard let sync = try? await PlaidService.fetchSync(accountID: accountID) else { return }
+        apply(sync)
+    }
+
+    /// Merges one sync into the ledger.
+    ///
+    /// A bank first reports a purchase while it is pending, before it knows the merchant or what
+    /// the spending was for, then re-reports it enriched once it posts. Applying only `added`
+    /// leaves those rows stuck with the raw card descriptor and no category forever, which is how
+    /// almost everything ends up filed under Other.
+    /// `addNew` is false when the caller is putting new rows in front of the user for review;
+    /// corrections and reversals still apply, because a cursor only reports them once.
+    @discardableResult func apply(_ sync: PlaidSync, addNew: Bool = true) -> Bool {
+        var changed = false
+        let result = update { data in
+            for id in sync.removed where data.transactions.contains(where: { $0.externalID == id }) {
+                data.transactions.removeAll { $0.externalID == id }
+                changed = true
+            }
+            for incoming in sync.added + sync.modified {
+                if let index = Self.index(of: incoming, in: data.transactions) {
+                    var existing = data.transactions[index]
+                    // The bank owns these. A category the user picked by hand is left alone; only
+                    // a row we never managed to categorize takes the bank's answer.
+                    existing.merchant = incoming.merchant
+                    existing.amount = incoming.amount
+                    existing.date = incoming.date
+                    existing.kind = incoming.kind
+                    existing.isTransfer = incoming.isTransfer
+                    existing.note = incoming.note
+                    existing.externalID = incoming.externalID
+                    if existing.category == .other { existing.category = incoming.category }
+                    guard existing != data.transactions[index] else { continue }
+                    data.transactions[index] = existing
+                    changed = true
+                } else if addNew, (data.transactions.first { DuplicateDetector.matches($0, incoming) }) == nil {
+                    data.transactions.append(incoming)
+                    changed = true
+                }
+            }
         }
-        if !accepted.isEmpty { add(accepted) }
+        return result && changed
+    }
+
+    /// The row a synced transaction belongs to. Matching on the bank's own id is exact. Rows synced
+    /// before ids were stored carry none, so those fall back to amount, day and account — but not
+    /// merchant, because the row most in need of repair is precisely the one the bank has since
+    /// renamed from a card descriptor to a real merchant. Two bank rows alike in amount and day can
+    /// be claimed in either order; both are rewritten from the bank's own data, so the ledger ends
+    /// up the same either way. Only bank rows are ever adopted — a manual entry that happens to
+    /// look identical stays the user's.
+    private static func index(of incoming: Transaction, in transactions: [Transaction]) -> Int? {
+        if let id = incoming.externalID,
+           let index = transactions.firstIndex(where: { $0.externalID == id }) { return index }
+        return transactions.firstIndex {
+            $0.source == .plaid && $0.externalID == nil && $0.amount == incoming.amount
+                && $0.kind == incoming.kind && $0.accountID == incoming.accountID
+                && Calendar.current.isDate($0.date, inSameDayAs: incoming.date)
+        }
     }
     func duplicate(of transaction: Transaction, including pending: [Transaction] = []) -> Transaction? {
         (data.transactions + pending).first { DuplicateDetector.matches($0, transaction) }

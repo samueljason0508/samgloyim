@@ -67,6 +67,9 @@ function normalize(t, institutionName) {
     // authorized_datetime is when the card was actually used; datetime is when it posted.
     datetime: t.authorized_datetime || t.datetime || null,
     category: t.personal_finance_category?.primary || t.category?.[0] || null,
+    // The primary category lumps tuition, insurance and subscriptions together under
+    // GENERAL_SERVICES; the detailed one tells them apart.
+    categoryDetailed: t.personal_finance_category?.detailed || null,
     institution: institutionName,
     pending: t.pending,
   };
@@ -167,6 +170,14 @@ app.get('/api/transactions', async (req, res) => {
     console.error(err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to sync transactions' });
   }
+});
+
+// Forgets every cursor so the next sync replays full history. Needed when the app learns to read
+// a field it used to ignore: a cursor reports each change once, so old rows are never re-sent.
+app.post('/api/resync', (req, res) => {
+  const items = loadItems().map((item) => ({ ...item, cursor: null }));
+  saveItems(items);
+  res.json({ items: items.length });
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, env: PLAID_ENV }));

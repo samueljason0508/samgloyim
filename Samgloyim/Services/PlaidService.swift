@@ -8,15 +8,26 @@ struct PlaidTransactionPayload: Decodable {
     var date: String
     var datetime: String?
     var category: String?
+    var categoryDetailed: String?
     var institution: String
     var pending: Bool
 
     func toTransaction(accountID: UUID) -> Transaction {
-        let category = SpendingCategory.fromPlaidPrimary(category) ?? SpendingCategory.infer(from: merchant)
+        let category = SpendingCategory.fromPlaid(primary: category, detailed: categoryDetailed)
+            ?? SpendingCategory.infer(from: merchant)
         let parsedDate = PlaidService.timestamp(from: datetime) ?? PlaidService.dateFormatter.date(from: date) ?? Date()
         return Transaction(merchant: merchant, amount: amountCents, date: parsedDate, category: category, accountID: accountID,
-            kind: kind == "income" ? .income : .expense, source: .plaid, note: pending ? "Pending at \(institution)" : institution)
+            kind: kind == "income" ? .income : .expense, source: .plaid,
+            note: pending ? "Pending at \(institution)" : institution, externalID: id,
+            isTransfer: SpendingCategory.isTransfer(primary: self.category, detailed: categoryDetailed))
     }
+}
+
+struct PlaidSync {
+    var added: [Transaction] = []
+    var modified: [Transaction] = []
+    var removed: [String] = []
+    var isEmpty: Bool { added.isEmpty && modified.isEmpty && removed.isEmpty }
 }
 
 struct PlaidLinkedItem: Decodable, Identifiable {
@@ -88,11 +99,15 @@ enum PlaidService {
         try validate(response)
     }
 
-    static func fetchNewTransactions(accountID: UUID) async throws -> [Transaction] {
+    /// A sync reports new rows, corrections to rows it sent before, and rows that never posted.
+    /// Dropping the last two leaves pending purchases frozen at their raw card descriptor.
+    static func fetchSync(accountID: UUID) async throws -> PlaidSync {
         let (data, response) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/transactions"))
         try validate(response)
         let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
-        return decoded.added.map { $0.toTransaction(accountID: accountID) }
+        return PlaidSync(added: decoded.added.map { $0.toTransaction(accountID: accountID) },
+                         modified: decoded.modified.map { $0.toTransaction(accountID: accountID) },
+                         removed: decoded.removed)
     }
 
     private static func post(_ path: String, body: [String: String]) async throws -> Data {

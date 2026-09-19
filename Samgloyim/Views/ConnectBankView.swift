@@ -4,6 +4,7 @@ import LinkKit
 struct ConnectBankView: View {
     var accountID: UUID
     var onImported: (ImportResult) -> Void
+    @EnvironmentObject var store: FinanceStore
     @SwiftUI.Environment(\.dismiss) private var dismiss
 
     private enum Phase: Equatable {
@@ -72,8 +73,9 @@ struct ConnectBankView: View {
         phase = .exchanging
         do {
             try await PlaidService.exchangePublicToken(success.publicToken, institutionName: success.metadata.institution.name)
-            let transactions = try await PlaidService.fetchNewTransactions(accountID: accountID)
-            onImported(ImportResult(transactions: transactions, warnings: transactions.isEmpty ? ["No new transactions were returned yet. Some banks take a moment after linking before transactions are available — try again shortly."] : []))
+            let sync = try await PlaidService.fetchSync(accountID: accountID)
+            store.apply(sync, addNew: false)
+            onImported(ImportResult(transactions: sync.added, warnings: sync.added.isEmpty ? ["No new transactions were returned yet. Some banks take a moment after linking before transactions are available — try again shortly."] : []))
             dismiss()
         } catch {
             phase = .error((error as? ImportError)?.errorDescription ?? "Your bank connected, but we couldn’t finish syncing transactions. Try again from Import.")

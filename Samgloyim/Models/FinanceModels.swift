@@ -63,9 +63,23 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
         return rules.first { $0.1.contains(where: name.contains) }?.0 ?? .other
     }
 
-    static func fromPlaidPrimary(_ raw: String?) -> Self? {
-        guard let raw else { return nil }
-        switch raw {
+    /// Plaid's detailed category carries far more than its primary one — `GENERAL_SERVICES`
+    /// alone covers tuition, insurance and subscriptions, which is why so much used to pile up
+    /// in Other. The detailed value is consulted first and the primary is the fallback.
+    static func fromPlaid(primary: String?, detailed: String?) -> Self? {
+        switch detailed {
+        case "GENERAL_SERVICES_EDUCATION": return .education
+        case "GENERAL_SERVICES_INSURANCE", "LOAN_PAYMENTS_MORTGAGE_PAYMENT": return .home
+        case "GENERAL_SERVICES_AUTOMOTIVE": return .transport
+        case "GENERAL_SERVICES_CHILDCARE", "GENERAL_SERVICES_CONSULTING_AND_LEGAL",
+             "GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING", "GENERAL_SERVICES_POSTAGE_AND_SHIPPING",
+             "GENERAL_SERVICES_STORAGE": return .other
+        case "LOAN_PAYMENTS_STUDENT_LOAN_PAYMENT": return .education
+        case "LOAN_PAYMENTS_CAR_PAYMENT": return .transport
+        default: break
+        }
+        guard let primary else { return nil }
+        switch primary {
         case "GROCERIES": return .groceries
         case "FOOD_AND_DRINK": return .food
         case "TRANSPORTATION", "TRAVEL": return .transport
@@ -73,9 +87,19 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
         case "RENT_AND_UTILITIES", "HOME_IMPROVEMENT": return .home
         case "ENTERTAINMENT": return .fun
         case "MEDICAL", "PERSONAL_CARE": return .health
-        case "GENERAL_SERVICES", "GOVERNMENT_AND_NON_PROFIT", "LOAN_PAYMENTS", "BANK_FEES", "TRANSFER_IN", "TRANSFER_OUT", "INCOME": return .other
+        case "LOAN_PAYMENTS": return .home
+        case "GENERAL_SERVICES", "GOVERNMENT_AND_NON_PROFIT", "BANK_FEES", "TRANSFER_IN", "TRANSFER_OUT", "INCOME": return .other
         default: return nil
         }
+    }
+
+    /// Money moving between the user's own accounts, or paying off a card whose purchases are
+    /// already recorded. Counting these as spending double-counts and, in the case of a large
+    /// account transfer, swamps every real number on the screen.
+    static func isTransfer(primary: String?, detailed: String?) -> Bool {
+        if detailed == "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" { return true }
+        guard let primary else { return false }
+        return primary == "TRANSFER_IN" || primary == "TRANSFER_OUT"
     }
 }
 
@@ -118,6 +142,12 @@ struct Transaction: Identifiable, Codable, Equatable {
     var source: TransactionSource = .manual
     var note: String = ""
     var receipt: ReceiptAttachment?
+    /// Plaid's transaction id, so a later sync can enrich or remove the row it already sent.
+    var externalID: String?
+    /// Moves money rather than spending it; excluded from spending and income totals.
+    /// Optional because a non-optional Bool would fail to decode every save written before it
+    /// existed. Absent means the same as false: nothing was ever flagged as a transfer.
+    var isTransfer: Bool?
 }
 
 extension Transaction {

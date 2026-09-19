@@ -19,6 +19,7 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - Account filters and an account-to-category flow diagram inspired by the PDF. **Follow your money** switches between that flow, a per-account breakdown, and a per-bank breakdown, each showing spend, share of the month, transaction count, and category split. The bank view matters because a sync pulls every linked institution into one local account, so grouping by account alone can collapse several banks into a single row.
 - Add, edit, delete, and search expenses and income; category and type filters. Transactions record a time as well as a date; rows show it only when one exists, since imported rows carry a date alone.
 - Import review shows where each row came from and which account it lands in, so a sync spanning two banks stays readable.
+- Bank rows are categorized from Plaid's detailed category, not just its primary one, and a sync applies the bank's later corrections and reversals as well as its new rows. Money moved between your own accounts — card payoffs, transfers — is recorded but excluded from spending and income, so it neither double-counts nor swamps the month.
 - Create and edit local accounts with opening balances.
 - Receipt OCR from multiple Photos or Files images. Every reading must be opened, checked, and saved before import. OCR reads merchant, date, and receipt total; it does not itemize mixed-category receipts.
 - Photograph a receipt and match it to a card purchase. The total must equal a purchase exactly; a near miss is never rounded onto the closest one. When nothing matches, several purchases tie, or the suggestion is wrong, you pick the purchase yourself — or save the receipt as a new one.
@@ -73,6 +74,8 @@ All amounts are integer cents in USD. Income is excluded from spending totals. R
 Receipt images are processed with Apple's on-device Vision text recognition; the app keeps reviewed fields and extracted text, not the original image.
 
 Bank sync goes through Plaid and requires the local backend in `backend/` and your own Plaid credentials; connections are read-only and scoped to transactions. This version does **not** connect to Apple Wallet, Google Sheets accounts, or Excel accounts; it does not read `.xlsx` directly. Location-based merchant discounts are not implemented because they require a real offer database and location service. Insights are deterministic calculations; lessons are written content, not an AI chat service. There is no fraud detection or App Store deployment in this project.
+
+A bank first reports a purchase while it is pending, under a raw card descriptor and with no category, then re-reports it enriched once it posts. A cursor sends each of those changes exactly once, so a sync that reads only new rows leaves the first version frozen forever — which is how nearly everything ends up filed under Other. `POST /api/resync` forgets every cursor and replays full history; rows already stored are repaired in place rather than duplicated.
 
 Transactions and accounts persist locally. Deleting the app deletes its data. CSV export includes transactions, not a full backup of opening balances.
 

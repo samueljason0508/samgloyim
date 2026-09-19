@@ -210,8 +210,11 @@ struct ImportView: View {
         busy = true; progress = "Syncing your linked bank…"
         defer { busy = false }
         do {
-            let transactions = try await PlaidService.fetchNewTransactions(accountID: accountID)
-            prepare(ImportResult(transactions: transactions, warnings: transactions.isEmpty ? ["No new transactions since your last sync."] : []))
+            // New rows go to review, but corrections and reversals are applied straight away:
+            // the cursor reports each one once, so anything skipped here is lost for good.
+            let sync = try await PlaidService.fetchSync(accountID: accountID)
+            store.apply(sync, addNew: false)
+            prepare(ImportResult(transactions: sync.added, warnings: sync.added.isEmpty ? ["No new transactions since your last sync."] : []))
         } catch { self.error = error.localizedDescription }
     }
     private func sampleImport() {
