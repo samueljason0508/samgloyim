@@ -16,7 +16,7 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 ## What works
 
 - Monthly spending overview, cumulative chart, and category donut.
-- Account filters and an account-to-category flow diagram inspired by the PDF. **Follow your money** switches between that flow and a per-account breakdown showing each account's spend, share, transaction count, balance, and category split.
+- Account filters and an account-to-category flow diagram inspired by the PDF. **Follow your money** switches between that flow, a per-account breakdown, and a per-bank breakdown, each showing spend, share of the month, transaction count, and category split. The bank view matters because a sync pulls every linked institution into one local account, so grouping by account alone can collapse several banks into a single row.
 - Add, edit, delete, and search expenses and income; category and type filters. Transactions record a time as well as a date; rows show it only when one exists, since imported rows carry a date alone.
 - Import review shows where each row came from and which account it lands in, so a sync spanning two banks stays readable.
 - Create and edit local accounts with opening balances.

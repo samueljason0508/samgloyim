@@ -1,7 +1,7 @@
 import SwiftUI
 import Charts
 
-enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "By account" }
+enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "Account", banks = "Bank" }
 
 struct InsightsView: View {
     @EnvironmentObject var store: FinanceStore
@@ -21,8 +21,7 @@ struct InsightsView: View {
                 }.padding(23).background(Palette.sage, in: RoundedRectangle(cornerRadius: 24))
                 VStack(alignment: .leading, spacing: 18) {
                     SectionHeading(title: "Follow your money")
-                    Text(flowMode == .flow ? "From each account to the things in your life." : "What each account carried this month.")
-                        .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    Text(flowSubtitle).font(.system(size: 11)).foregroundStyle(Palette.muted)
                     HStack(spacing: 5) {
                         ForEach(FlowMode.allCases, id: \.self) { value in
                             Button { flowMode = value } label: {
@@ -38,7 +37,7 @@ struct InsightsView: View {
                         MoneyFlowView(transactions: store.expenses, accounts: store.data.accounts).frame(height: 215)
                         HStack { Text("ACCOUNTS"); Spacer(); Text("SPENDING") }.font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
                     } else {
-                        accountBreakdown
+                        breakdown(of: flowMode == .banks ? bankGroups : accountGroups)
                     }
                 }.pocketCard(padding: 18)
                 VStack(alignment: .leading, spacing: 16) {
@@ -80,37 +79,69 @@ struct InsightsView: View {
             }.padding(.horizontal, 22).padding(.bottom, 30)
         }.pageBackground().toolbar(.hidden, for: .navigationBar).sheet(item: $lesson) { LessonView(lesson: $0) }
     }
-    private struct AccountSpending {
-        var account: BankAccount
+    private var flowSubtitle: String {
+        switch flowMode {
+        case .flow: "From each account to the things in your life."
+        case .accounts: "What each account carried this month."
+        case .banks: "What each bank carried this month."
+        }
+    }
+
+    private struct SpendingGroup: Identifiable {
+        var id: String
+        var name: String
+        var detail: String
+        var symbol: String
+        var color: Color
         var amount: Int
         var count: Int
         var categories: [(category: SpendingCategory, amount: Int)]
     }
 
-    /// Only accounts that actually spent this month, largest first. Respects the account filter
-    /// above, so filtering to one account narrows this to that account.
-    private var accountTotals: [AccountSpending] {
+    private func group(_ rows: [Transaction]) -> (amount: Int, count: Int, categories: [(category: SpendingCategory, amount: Int)]) {
+        let categories = Dictionary(grouping: rows, by: \.category)
+            .map { (category: $0.key, amount: $0.value.reduce(0) { $0 + $1.amount }) }
+            .sorted { $0.amount > $1.amount }
+        return (rows.reduce(0) { $0 + $1.amount }, rows.count, categories)
+    }
+
+    /// Only accounts that spent this month, largest first. Respects the account filter above.
+    private var accountGroups: [SpendingGroup] {
         store.data.accounts.compactMap { account in
             let rows = store.expenses.filter { $0.accountID == account.id }
             guard !rows.isEmpty else { return nil }
-            let categories = Dictionary(grouping: rows, by: \.category)
-                .map { (category: $0.key, amount: $0.value.reduce(0) { $0 + $1.amount }) }
-                .sorted { $0.amount > $1.amount }
-            return AccountSpending(account: account, amount: rows.reduce(0) { $0 + $1.amount }, count: rows.count, categories: categories)
+            let totals = group(rows)
+            return SpendingGroup(id: account.id.uuidString, name: account.name,
+                                 detail: "\(totals.count) transaction\(totals.count == 1 ? "" : "s") · balance \(Money.format(store.balance(account)))",
+                                 symbol: account.symbol, color: Palette.colors[account.colorIndex % Palette.colors.count],
+                                 amount: totals.amount, count: totals.count, categories: totals.categories)
         }.sorted { $0.amount > $1.amount }
     }
 
-    private var accountBreakdown: some View {
+    /// A sync pulls every linked institution into one local account, so grouping by account can
+    /// collapse four banks into a single row. This splits them back out by where they came from.
+    private var bankGroups: [SpendingGroup] {
+        Dictionary(grouping: store.expenses, by: \.originName).map { origin, rows in
+            let totals = group(rows)
+            let synced = rows.contains { $0.institutionName != nil }
+            return SpendingGroup(id: origin, name: origin,
+                                 detail: "\(totals.count) transaction\(totals.count == 1 ? "" : "s")" + (synced ? " · synced" : " · added by hand"),
+                                 symbol: synced ? "building.columns.fill" : "square.and.pencil",
+                                 color: Palette.colors[Self.colorIndex(for: origin)],
+                                 amount: totals.amount, count: totals.count, categories: totals.categories)
+        }.sorted { $0.amount > $1.amount }
+    }
+
+    private func breakdown(of groups: [SpendingGroup]) -> some View {
         VStack(spacing: 18) {
-            ForEach(accountTotals, id: \.account.id) { entry in
+            ForEach(groups) { entry in
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 11) {
-                        Image(systemName: entry.account.symbol).font(.system(size: 13, weight: .light))
+                        Image(systemName: entry.symbol).font(.system(size: 13, weight: .light))
                             .frame(width: 30, height: 30).background(Palette.sage, in: RoundedRectangle(cornerRadius: 9))
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(entry.account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                            Text("\(entry.count) transaction\(entry.count == 1 ? "" : "s") · balance \(Money.format(store.balance(entry.account)))")
-                                .font(.system(size: 9)).foregroundStyle(Palette.muted).lineLimit(1)
+                            Text(entry.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            Text(entry.detail).font(.system(size: 9)).foregroundStyle(Palette.muted).lineLimit(1)
                         }
                         Spacer(minLength: 4)
                         VStack(alignment: .trailing, spacing: 3) {
@@ -118,8 +149,7 @@ struct InsightsView: View {
                             Text("\(share(entry.amount))% of spending").font(.system(size: 9)).foregroundStyle(Palette.muted)
                         }
                     }
-                    ProgressTrack(value: Double(entry.amount) / Double(max(store.spent, 1)),
-                                  color: Palette.colors[entry.account.colorIndex % Palette.colors.count], height: 4)
+                    ProgressTrack(value: Double(entry.amount) / Double(max(store.spent, 1)), color: entry.color, height: 4)
                     VStack(spacing: 6) {
                         ForEach(entry.categories.prefix(4), id: \.category) { item in
                             HStack(spacing: 8) {
@@ -138,9 +168,14 @@ struct InsightsView: View {
                         }
                     }
                 }.accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(entry.account.name), \(Money.format(entry.amount)) across \(entry.count) transactions, \(share(entry.amount)) percent of spending")
+                    .accessibilityLabel("\(entry.name), \(Money.format(entry.amount)) across \(entry.count) transactions, \(share(entry.amount)) percent of spending")
             }
         }
+    }
+
+    /// Swift's `hashValue` is seeded per process, so a bank would change colour on every launch.
+    static func colorIndex(for name: String) -> Int {
+        Int(name.unicodeScalars.reduce(UInt32(7)) { $0 &* 31 &+ $1.value } % UInt32(Palette.colors.count))
     }
 
     private func share(_ amount: Int) -> Int {

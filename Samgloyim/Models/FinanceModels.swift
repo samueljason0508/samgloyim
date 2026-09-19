@@ -121,6 +121,21 @@ struct Transaction: Identifiable, Codable, Equatable {
 }
 
 extension Transaction {
+    /// The bank a synced row came from. A sync pulls every linked institution into one local
+    /// account, so the institution — which the sync records in the note — is the only thing
+    /// separating one bank's transactions from another's.
+    var institutionName: String? {
+        guard source == .plaid else { return nil }
+        let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return nil }
+        let pending = "Pending at "
+        return note.hasPrefix(pending) ? String(note.dropFirst(pending.count)) : note
+    }
+
+    /// Where a row came from, for grouping and review: the bank when there is one, else how it
+    /// was added.
+    var originName: String { institutionName ?? source.rawValue }
+
     /// Bank sync, CSV rows, and receipts carry a calendar date but no clock time, so they land on
     /// midnight. Rendering "12:00 AM" for those would invent precision the source never had.
     var recordedTime: Date? {
