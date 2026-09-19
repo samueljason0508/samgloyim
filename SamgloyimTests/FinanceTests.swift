@@ -113,6 +113,30 @@ final class FinanceTests: XCTestCase {
         XCTAssertNotNil(Transaction(merchant: "Manual", amount: 500, date: afternoon, category: .food, accountID: account).recordedTime)
     }
 
+    @MainActor func testMigrationRepairsBankRowsStoredADayEarly() throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let account = UUID()
+        let utcMidnight = try XCTUnwrap(utc.date(from: DateComponents(year: 2026, month: 9, day: 18)))
+        let localMidnight = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 18)))
+
+        var data = FinanceData(schemaVersion: 2, accounts: [BankAccount(id: account, name: "Everyday", detail: "")],
+            transactions: [
+                Transaction(merchant: "Bank row", amount: 6842, date: utcMidnight, category: .groceries, accountID: account, source: .plaid),
+                Transaction(merchant: "Manual row", amount: 500, date: utcMidnight, category: .food, accountID: account, source: .manual)
+            ])
+        FinanceStore.repairSyncedDates(&data)
+
+        XCTAssertEqual(data.transactions[0].date, localMidnight, "The bank row should land on the day the bank reported")
+        XCTAssertEqual(Calendar.current.dateComponents([.day], from: data.transactions[0].date).day, 18)
+        XCTAssertEqual(data.transactions[1].date, utcMidnight, "Rows from other sources are never rewritten")
+
+        // Running again must not shift the date a second time.
+        var again = data
+        FinanceStore.repairSyncedDates(&again)
+        XCTAssertEqual(again.transactions[0].date, localMidnight)
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))

@@ -16,6 +16,7 @@ final class FinanceStore: ObservableObject {
             if FileManager.default.fileExists(atPath: self.fileURL.path) {
                 var decoded = try JSONDecoder().decode(FinanceData.self, from: Data(contentsOf: self.fileURL))
                 guard decoded.schemaVersion <= FinanceData.currentSchemaVersion else { throw CocoaError(.fileReadCorruptFile) }
+                if decoded.schemaVersion < 3 { Self.repairSyncedDates(&decoded) }
                 decoded.schemaVersion = FinanceData.currentSchemaVersion
                 data = decoded
             } else {
@@ -25,6 +26,23 @@ final class FinanceStore: ObservableObject {
             data = .empty()
             canWrite = false
             errorMessage = "Your saved data couldn’t be read. The original file has been preserved. Restart the app or restore it from a backup before making changes."
+        }
+    }
+
+    /// Bank rows synced before the timezone fix were parsed as UTC, so they sit at UTC midnight —
+    /// the previous evening in any zone west of London. Sitting exactly on UTC midnight is the
+    /// signature of that bug; a correctly parsed row sits on *local* midnight instead. Rebuild the
+    /// affected rows on the calendar day the bank actually reported.
+    static func repairSyncedDates(_ data: inout FinanceData) {
+        var utc = Calendar(identifier: .gregorian)
+        guard let zone = TimeZone(identifier: "UTC") else { return }
+        utc.timeZone = zone
+        for index in data.transactions.indices where data.transactions[index].source == .plaid {
+            let parts = utc.dateComponents([.year, .month, .day, .hour, .minute, .second], from: data.transactions[index].date)
+            guard parts.hour == 0, parts.minute == 0, parts.second == 0,
+                  let corrected = Calendar.current.date(from: DateComponents(year: parts.year, month: parts.month, day: parts.day))
+            else { continue }
+            data.transactions[index].date = corrected
         }
     }
 

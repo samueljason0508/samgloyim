@@ -131,7 +131,8 @@ extension Transaction {
 
 struct FinanceData: Codable, Equatable {
     /// v2 added `Transaction.receipt`. Older saves decode unchanged because the field is optional.
-    static let currentSchemaVersion = 2
+    /// v3 repaired bank rows stored a day early by the UTC date-parsing bug.
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int = currentSchemaVersion
     var name: String = "friend"
