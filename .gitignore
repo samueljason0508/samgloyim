@@ -6,8 +6,9 @@ xcuserdata/
 *.xcresult
 output/
 
-# Backend secrets — never commit Plaid credentials
+# Backend secrets — never commit Plaid credentials or linked-account data
 backend/.env
 backend/node_modules/
+backend/data/
 *.env
 

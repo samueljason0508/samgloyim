@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var export = false
     @State private var exportError: String?
     @State private var exportDocument = CSVDocument(text: "")
+    @State private var linkedBanks: [PlaidLinkedItem] = []
+    @State private var disconnectError: String?
     enum ResetAction: String, Identifiable { case empty, demo; var id: String { rawValue } }
 
     var body: some View {
@@ -45,6 +47,21 @@ struct SettingsView: View {
                     }
                     Button { accountRequest = AccountRequest(account: nil) } label: { Label("Add account", systemImage: "plus") }.accessibilityIdentifier("add-account")
                 } header: { Text("Your accounts") } footer: { Text("Tracked balances = opening balance + all recorded income − all recorded expenses. These aren’t live bank balances.") }
+                if !linkedBanks.isEmpty {
+                    Section {
+                        ForEach(linkedBanks) { item in
+                            HStack(spacing: 12) {
+                                Image(systemName: "building.columns.fill").frame(width: 32).foregroundStyle(Palette.forest)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.institutionName).font(.system(size: 15, weight: .medium))
+                                    Text("Read-only · connected \(formattedDate(item.linkedAt))").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                                }
+                                Spacer()
+                                Button(role: .destructive) { Task { await disconnect(item) } } label: { Image(systemName: "trash") }
+                            }.padding(.vertical, 5)
+                        }
+                    } header: { Text("Connected banks") } footer: { Text("Connections are read-only: this app can only see transactions, never move money. Disconnecting revokes access immediately.") }
+                }
                 Section("Your data") {
                     Button {
                         exportDocument = CSVDocument(text: CSVService.export(store.data.transactions, accounts: store.data.accounts)); export = true
@@ -55,8 +72,8 @@ struct SettingsView: View {
                 }
                 Section("Built for this first version") {
                     feature("On-device receipt reading", detail: "Choose receipt images from Photos or Files, then check the extracted merchant, total, date, and category.")
-                    feature("Spreadsheet imports", detail: "Import CSV exports from Excel or Google Sheets. Direct .xlsx and cloud document connections aren’t included.")
-                    feature("Accounts you control", detail: "Add transactions manually or import them. Plaid, Apple Wallet, and automatic bank syncing aren’t connected in this version.")
+                    feature("Read-only bank sync", detail: "Connect a bank via Plaid to sync transactions automatically. This app can only read transaction data — it can never move money, and you can disconnect a bank anytime above.")
+                    feature("Accounts you control", detail: "Add transactions manually or import them. Apple Wallet isn’t connected in this version.")
                     feature("Clear spending insights", detail: "Charts and monthly notes use your recorded data. Lessons are written educational content; there’s no AI chatbot or live deal service.")
                 }
                 Section { Text("Your data is saved locally on this device. This app has no backend, analytics, or sign-in. It uses USD for all amounts. Export your transactions before deleting the app.").font(.footnote).foregroundStyle(Palette.muted) }
@@ -71,10 +88,22 @@ struct SettingsView: View {
                     if case .failure(let error) = result { exportError = error.localizedDescription }
                 }
                 .alert("Export couldn’t finish", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) { Button("OK") { exportError = nil } } message: { Text(exportError ?? "Try again.") }
+                .alert("Couldn’t disconnect", isPresented: Binding(get: { disconnectError != nil }, set: { if !$0 { disconnectError = nil } })) { Button("OK") { disconnectError = nil } } message: { Text(disconnectError ?? "Try again.") }
+                .task { await loadLinkedBanks() }
         }
     }
     private func feature(_ title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 7) { Text(title).font(.system(size: 14, weight: .medium)); Text(detail).font(.system(size: 12)).foregroundStyle(Palette.muted).lineSpacing(3) }.padding(.vertical, 7)
+    }
+    @MainActor private func loadLinkedBanks() async {
+        linkedBanks = (try? await PlaidService.fetchLinkedItems()) ?? []
+    }
+    @MainActor private func disconnect(_ item: PlaidLinkedItem) async {
+        do { try await PlaidService.disconnectItem(item.itemId); await loadLinkedBanks() }
+        catch { disconnectError = error.localizedDescription }
+    }
+    private func formattedDate(_ iso: String) -> String {
+        ISO8601DateFormatter().date(from: iso).map { $0.formatted(.dateTime.month(.abbreviated).day().year()) } ?? "recently"
     }
 }
 

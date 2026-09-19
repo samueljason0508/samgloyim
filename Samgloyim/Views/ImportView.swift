@@ -7,7 +7,6 @@ struct ImportView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var photos: [PhotosPickerItem] = []
     @State private var filePicker = false
-    @State private var receiptFiles = false
     @State private var accountID: UUID?
     @State private var busy = false
     @State private var progress = ""
@@ -19,6 +18,8 @@ struct ImportView: View {
     @State private var editing: Transaction?
     @State private var showingReview = false
     @State private var importedCount: Int?
+    @State private var connectingBank = false
+    @State private var linkedInstitutions: [String] = []
 
     private var duplicateIDs: Set<UUID> {
         var previous: [Transaction] = [], ids: Set<UUID> = []
@@ -46,8 +47,9 @@ struct ImportView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(importedCount == nil ? "Cancel" : "Done") { dismiss() }.disabled(busy) } }
                 .interactiveDismissDisabled(busy)
                 .onAppear { accountID = store.selectedAccountID ?? store.data.accounts.first?.id }
+                .task { await loadLinkedInstitutions() }
                 .onChange(of: photos) { _, items in if !items.isEmpty { Task { await readPhotos(items) } } }
-                .fileImporter(isPresented: $filePicker, allowedContentTypes: receiptFiles ? [.image] : [.commaSeparatedText, .plainText], allowsMultipleSelection: receiptFiles) { result in
+                .fileImporter(isPresented: $filePicker, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
                     switch result {
                     case .success(let urls): Task { await readFiles(urls) }
                     case .failure(let failure): error = failure.localizedDescription
@@ -62,32 +64,36 @@ struct ImportView: View {
                     }
                 }
                 .alert("Import needs attention", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") { error = nil } } message: { Text(error ?? "Try another file.") }
+                .sheet(isPresented: $connectingBank) {
+                    if let accountID { ConnectBankView(accountID: accountID) { result in prepare(result) } }
+                }
+                .onChange(of: connectingBank) { _, presented in if !presented { Task { await loadLinkedInstitutions() } } }
         }
     }
     private var choices: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Less typing.\nMore perspective.").font(.system(size: 34, design: .serif)).tracking(-0.7)
-            Text("Receipts and spreadsheets, in one clear picture. You’ll review everything before it’s added.").font(.system(size: 14)).foregroundStyle(Palette.muted).lineSpacing(4)
+            Text("Bank sync and receipts, in one clear picture. You’ll review everything before it’s added.").font(.system(size: 14)).foregroundStyle(Palette.muted).lineSpacing(4)
             VStack(alignment: .leading, spacing: 8) {
                 Text("ADD TO ACCOUNT").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
                 Picker("Default account", selection: $accountID) { ForEach(store.data.accounts) { Text($0.name).tag(Optional($0.id)) } }.pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
             }.pocketCard(padding: 15)
+            if !linkedInstitutions.isEmpty {
+                Button { Task { await syncPlaid() } } label: {
+                    importOption(symbol: "arrow.triangle.2.circlepath", title: "Sync latest transactions", detail: linkedInstitutions.joined(separator: ", "), color: Palette.sage)
+                }.buttonStyle(.plain).accessibilityIdentifier("sync-plaid")
+            }
+            Button { connectingBank = true } label: {
+                importOption(symbol: "building.columns.fill", title: linkedInstitutions.isEmpty ? "Connect a bank" : "Connect another bank", detail: "Sync transactions automatically via Plaid", color: linkedInstitutions.isEmpty ? Palette.sage : Color(hex: 0xE7E1ED))
+            }.buttonStyle(.plain).accessibilityIdentifier("import-plaid")
             PhotosPicker(selection: $photos, maxSelectionCount: 10, matching: .images) {
                 importOption(symbol: "camera.viewfinder", title: "Receipt photos", detail: "Read up to 10 receipts from your library", color: Palette.sage)
             }.buttonStyle(.plain).accessibilityIdentifier("import-photos")
-            Button { receiptFiles = true; filePicker = true } label: {
+            Button { filePicker = true } label: {
                 importOption(symbol: "doc.viewfinder", title: "Receipts from Files", detail: "Choose images saved on your iPhone", color: Palette.peach)
             }.buttonStyle(.plain).accessibilityIdentifier("import-receipt-files")
-            Button { receiptFiles = false; filePicker = true } label: {
-                importOption(symbol: "tablecells", title: "Import a spreadsheet", detail: "CSV exports from Excel or Google Sheets", color: Color(hex: 0xE7E1ED))
-            }.buttonStyle(.plain).accessibilityIdentifier("import-csv")
-            VStack(alignment: .leading, spacing: 8) {
-                Text("A simple CSV works best").font(.system(size: 13, weight: .semibold))
-                Text("Required: date, merchant, amount\nOptional: category, account, kind, note").font(.system(size: 11, design: .monospaced)).lineSpacing(5).foregroundStyle(Palette.muted)
-                Text("Dates: YYYY-MM-DD or MM/DD/YYYY. Amounts: USD. Rows are expenses unless kind is income. Export .xlsx files as CSV first.").font(.system(size: 11)).foregroundStyle(Palette.muted).lineSpacing(3)
-            }.pocketCard(padding: 17)
             Button { sampleImport() } label: { Label("Try a sample import", systemImage: "sparkles").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity) }.padding(.vertical, 4).accessibilityIdentifier("sample-import")
-            Text("Receipt reading happens on your device. Original images aren’t stored by the app. No bank connection is required.").font(.system(size: 11)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).frame(maxWidth: .infinity)
+            Text("Receipt reading happens on your device. Original images aren’t stored by the app. Bank connections are read-only.").font(.system(size: 11)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).frame(maxWidth: .infinity)
         }
     }
     private func importOption(symbol: String, title: String, detail: String, color: Color) -> some View {
@@ -161,24 +167,18 @@ struct ImportView: View {
     }
     @MainActor private func readFiles(_ urls: [URL]) async {
         guard let accountID else { return }
-        busy = true; progress = receiptFiles ? "Reading your receipts…" : "Reading your spreadsheet…"
+        busy = true; progress = "Reading your receipts…"
         defer { busy = false }
         do {
             var transactions: [Transaction] = [], notes: [String] = []
-            for url in urls.prefix(receiptFiles ? 10 : 1) {
+            for url in urls.prefix(10) {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= (receiptFiles ? 25_000_000 : 5_000_000) else { throw ImportError.message("\(url.lastPathComponent) is too large. Use CSVs under 5 MB or images under 25 MB.") }
+                guard size <= 25_000_000 else { throw ImportError.message("\(url.lastPathComponent) is too large. Use images under 25 MB.") }
                 let data = try Data(contentsOf: url)
-                if receiptFiles {
-                    do { transactions.append(try await readReceipt(data, accountID: accountID)) }
-                    catch { notes.append("\(url.lastPathComponent): \(error.localizedDescription)") }
-                } else {
-                    guard let text = String(data: data, encoding: .utf8) else { throw ImportError.message("Export your spreadsheet as UTF-8 CSV and try again.") }
-                    let result = try CSVService.parse(text, accounts: store.data.accounts, defaultAccountID: accountID)
-                    transactions += result.transactions; notes += result.warnings
-                }
+                do { transactions.append(try await readReceipt(data, accountID: accountID)) }
+                catch { notes.append("\(url.lastPathComponent): \(error.localizedDescription)") }
             }
             if urls.count > 10 { notes.append("Only the first 10 images were read. Import the remaining images separately.") }
             prepare(ImportResult(transactions: transactions, warnings: notes))
@@ -188,6 +188,18 @@ struct ImportView: View {
         let reading = try await ReceiptScanner.scan(data)
         return Transaction(merchant: reading.merchant, amount: reading.amount ?? 0, date: reading.date ?? Date(), category: SpendingCategory.infer(from: reading.merchant), accountID: accountID, source: .receipt,
             note: "Review merchant, total, and date.\(reading.date == nil ? " No date found; today is a placeholder." : "")\n\nReceipt text:\n\(reading.text)")
+    }
+    @MainActor private func loadLinkedInstitutions() async {
+        linkedInstitutions = (try? await PlaidService.fetchLinkedItems().map(\.institutionName)) ?? []
+    }
+    @MainActor private func syncPlaid() async {
+        guard let accountID else { return }
+        busy = true; progress = "Syncing your linked bank…"
+        defer { busy = false }
+        do {
+            let transactions = try await PlaidService.fetchNewTransactions(accountID: accountID)
+            prepare(ImportResult(transactions: transactions, warnings: transactions.isEmpty ? ["No new transactions since your last sync."] : []))
+        } catch { self.error = error.localizedDescription }
     }
     private func sampleImport() {
         guard let accountID else { return }

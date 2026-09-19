@@ -122,6 +122,18 @@ final class FinanceStore: ObservableObject {
     func moveMonth(_ offset: Int) {
         selectedMonth = Calendar.current.date(byAdding: .month, value: offset, to: selectedMonth) ?? selectedMonth
     }
+    /// Silently pulls new transactions for any linked bank and merges them in, skipping known duplicates.
+    /// Safe to call often (app launch, foreground) — a cursor-based sync only ever returns what's new.
+    func autoSyncPlaid() async {
+        guard let accountID = selectedAccountID ?? data.accounts.first?.id else { return }
+        guard let items = try? await PlaidService.fetchLinkedItems(), !items.isEmpty else { return }
+        guard let fetched = try? await PlaidService.fetchNewTransactions(accountID: accountID), !fetched.isEmpty else { return }
+        var accepted: [Transaction] = []
+        for candidate in fetched where duplicate(of: candidate, including: accepted) == nil {
+            accepted.append(candidate)
+        }
+        if !accepted.isEmpty { add(accepted) }
+    }
     func duplicate(of transaction: Transaction, including pending: [Transaction] = []) -> Transaction? {
         (data.transactions + pending).first { DuplicateDetector.matches($0, transaction) }
     }

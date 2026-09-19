@@ -62,6 +62,21 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
         ]
         return rules.first { $0.1.contains(where: name.contains) }?.0 ?? .other
     }
+
+    static func fromPlaidPrimary(_ raw: String?) -> Self? {
+        guard let raw else { return nil }
+        switch raw {
+        case "GROCERIES": return .groceries
+        case "FOOD_AND_DRINK": return .food
+        case "TRANSPORTATION", "TRAVEL": return .transport
+        case "GENERAL_MERCHANDISE", "RETAIL": return .shopping
+        case "RENT_AND_UTILITIES", "HOME_IMPROVEMENT": return .home
+        case "ENTERTAINMENT": return .fun
+        case "MEDICAL", "PERSONAL_CARE": return .health
+        case "GENERAL_SERVICES", "GOVERNMENT_AND_NON_PROFIT", "LOAN_PAYMENTS", "BANK_FEES", "TRANSFER_IN", "TRANSFER_OUT", "INCOME": return .other
+        default: return nil
+        }
+    }
 }
 
 enum TransactionKind: String, Codable, CaseIterable, Identifiable {
@@ -70,7 +85,7 @@ enum TransactionKind: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum TransactionSource: String, Codable { case manual = "Manual", receipt = "Receipt", csv = "Spreadsheet", sample = "Sample" }
+enum TransactionSource: String, Codable { case manual = "Manual", receipt = "Receipt", csv = "Spreadsheet", sample = "Sample", plaid = "Bank" }
 
 struct BankAccount: Identifiable, Codable, Equatable {
     var id = UUID()
