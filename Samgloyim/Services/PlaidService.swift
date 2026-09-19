@@ -6,13 +6,14 @@ struct PlaidTransactionPayload: Decodable {
     var amountCents: Int
     var kind: String
     var date: String
+    var datetime: String?
     var category: String?
     var institution: String
     var pending: Bool
 
     func toTransaction(accountID: UUID) -> Transaction {
         let category = SpendingCategory.fromPlaidPrimary(category) ?? SpendingCategory.infer(from: merchant)
-        let parsedDate = PlaidService.dateFormatter.date(from: date) ?? Date()
+        let parsedDate = PlaidService.timestamp(from: datetime) ?? PlaidService.dateFormatter.date(from: date) ?? Date()
         return Transaction(merchant: merchant, amount: amountCents, date: parsedDate, category: category, accountID: accountID,
             kind: kind == "income" ? .income : .expense, source: .plaid, note: pending ? "Pending at \(institution)" : institution)
     }
@@ -48,6 +49,21 @@ enum PlaidService {
         formatter.timeZone = .current
         return formatter
     }()
+
+    private static let isoFormatter = ISO8601DateFormatter()
+
+    /// A real clock time for a transaction, when the bank sent one. Most don't: Plaid returns
+    /// these fields only for select institutions, and some of those fill them with a midnight
+    /// placeholder. A placeholder is not a time, so it falls back to the plain calendar date.
+    static func timestamp(from datetime: String?) -> Date? {
+        guard let datetime, let parsed = isoFormatter.date(from: datetime) else { return nil }
+        var utc = Calendar(identifier: .gregorian)
+        guard let zone = TimeZone(identifier: "UTC") else { return nil }
+        utc.timeZone = zone
+        let parts = utc.dateComponents([.hour, .minute, .second], from: parsed)
+        guard parts.hour != 0 || parts.minute != 0 || parts.second != 0 else { return nil }
+        return parsed
+    }
 
     static func createLinkToken() async throws -> String {
         struct Body: Decodable { var link_token: String }

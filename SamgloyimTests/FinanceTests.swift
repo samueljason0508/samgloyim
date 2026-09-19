@@ -91,9 +91,26 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(ReceiptScanner.parse(lines: ["STORE", "BALANCE DUE 15.00"]).amount, 1500)
     }
 
+    func testBankTimestampIsUsedOnlyWhenTheInstitutionSendsARealOne() throws {
+        // Chime sends a real authorized_datetime; most institutions send null or a midnight placeholder.
+        let real = try XCTUnwrap(PlaidService.timestamp(from: "2026-09-13T21:55:52Z"))
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        XCTAssertEqual(utc.dateComponents([.hour, .minute], from: real).hour, 21)
+        XCTAssertNil(PlaidService.timestamp(from: "2026-09-13T00:00:00Z"), "A midnight placeholder is not a time")
+        XCTAssertNil(PlaidService.timestamp(from: nil))
+        XCTAssertNil(PlaidService.timestamp(from: "not a date"))
+
+        let timed = PlaidTransactionPayload(id: "t1", merchant: "Chime buy", amountCents: 1200, kind: "expense",
+                                            date: "2026-09-13", datetime: "2026-09-13T21:55:52Z", category: nil,
+                                            institution: "Chime", pending: false).toTransaction(accountID: UUID())
+        XCTAssertNotNil(timed.recordedTime, "A bank that sends a clock time should surface one")
+        XCTAssertEqual(timed.date, real)
+    }
+
     func testSyncedBankDatesLandOnTheLocalCalendarDay() throws {
         let payload = PlaidTransactionPayload(id: "t1", merchant: "Trader Joe's", amountCents: 6842, kind: "expense",
-                                              date: "2026-09-18", category: "GROCERIES", institution: "Test Bank", pending: false)
+                                              date: "2026-09-18", datetime: nil, category: "GROCERIES", institution: "Test Bank", pending: false)
         let transaction = payload.toTransaction(accountID: UUID())
         let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: transaction.date)
         XCTAssertEqual(parts.year, 2026)

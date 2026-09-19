@@ -63,6 +63,9 @@ function normalize(t, institutionName) {
     amountCents: Math.round(Math.abs(t.amount) * 100),
     kind: t.amount > 0 ? 'expense' : 'income',
     date: t.date,
+    // Only some institutions send a clock time, and some of those send a midnight placeholder.
+    // authorized_datetime is when the card was actually used; datetime is when it posted.
+    datetime: t.authorized_datetime || t.datetime || null,
     category: t.personal_finance_category?.primary || t.category?.[0] || null,
     institution: institutionName,
     pending: t.pending,
