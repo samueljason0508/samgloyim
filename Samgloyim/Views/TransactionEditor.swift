@@ -16,6 +16,13 @@ struct TransactionEditor: View {
     @State private var showDelete = false
     @State private var initialized = false
 
+    /// A bank, CSV, or receipt row only ever had a calendar date. Offering a time field on one
+    /// shows a meaningless 12:00 AM and invites setting a time the source never recorded.
+    private var datePickerComponents: DatePickerComponents {
+        guard let transaction else { return [.date, .hourAndMinute] }
+        return transaction.recordedTime == nil ? [.date] : [.date, .hourAndMinute]
+    }
+
     private var valid: Bool {
         !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (Money.parse(amount) ?? 0) > 0 && accountID != nil
     }
@@ -37,7 +44,7 @@ struct TransactionEditor: View {
                     TextField(kind == .income ? "Where did it come from?" : "Where did you spend?", text: $merchant).textInputAutocapitalization(.words).accessibilityIdentifier("transaction-merchant")
                 } header: { Text("The essentials") } footer: { Text("Amounts are in US dollars.") }
                 Section("Details") {
-                    DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("Date", selection: $date, displayedComponents: datePickerComponents)
                     Picker("Account", selection: $accountID) {
                         ForEach(store.data.accounts) { Text($0.name).tag(Optional($0.id)) }
                     }
