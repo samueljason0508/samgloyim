@@ -1,9 +1,12 @@
 import SwiftUI
 import Charts
 
+enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "By account" }
+
 struct InsightsView: View {
     @EnvironmentObject var store: FinanceStore
     @State private var lesson: Lesson?
+    @State private var flowMode = FlowMode.flow
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 23) {
@@ -18,10 +21,25 @@ struct InsightsView: View {
                 }.padding(23).background(Palette.sage, in: RoundedRectangle(cornerRadius: 24))
                 VStack(alignment: .leading, spacing: 18) {
                     SectionHeading(title: "Follow your money")
-                    Text("From each account to the things in your life.").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                    if store.expenses.isEmpty { EmptyState(symbol: "point.3.connected.trianglepath.dotted", title: "Connect the dots", detail: "Your account-to-category map appears after you add expenses.") }
-                    else { MoneyFlowView(transactions: store.expenses, accounts: store.data.accounts).frame(height: 215) }
-                    HStack { Text("ACCOUNTS"); Spacer(); Text("SPENDING") }.font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
+                    Text(flowMode == .flow ? "From each account to the things in your life." : "What each account carried this month.")
+                        .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    HStack(spacing: 5) {
+                        ForEach(FlowMode.allCases, id: \.self) { value in
+                            Button { flowMode = value } label: {
+                                Text(value.rawValue).font(.system(size: 12, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(flowMode == value ? .white : .clear, in: Capsule())
+                                    .foregroundStyle(flowMode == value ? Palette.ink : Palette.muted)
+                            }.buttonStyle(.plain).accessibilityIdentifier("flow-\(value.rawValue)")
+                        }
+                    }.padding(4).background(Palette.line, in: Capsule())
+                    if store.expenses.isEmpty {
+                        EmptyState(symbol: "point.3.connected.trianglepath.dotted", title: "Connect the dots", detail: "Your account-to-category map appears after you add expenses.")
+                    } else if flowMode == .flow {
+                        MoneyFlowView(transactions: store.expenses, accounts: store.data.accounts).frame(height: 215)
+                        HStack { Text("ACCOUNTS"); Spacer(); Text("SPENDING") }.font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
+                    } else {
+                        accountBreakdown
+                    }
                 }.pocketCard(padding: 18)
                 VStack(alignment: .leading, spacing: 16) {
                     SectionHeading(title: "By category", detail: "Tap to explore")
@@ -62,6 +80,73 @@ struct InsightsView: View {
             }.padding(.horizontal, 22).padding(.bottom, 30)
         }.pageBackground().toolbar(.hidden, for: .navigationBar).sheet(item: $lesson) { LessonView(lesson: $0) }
     }
+    private struct AccountSpending {
+        var account: BankAccount
+        var amount: Int
+        var count: Int
+        var categories: [(category: SpendingCategory, amount: Int)]
+    }
+
+    /// Only accounts that actually spent this month, largest first. Respects the account filter
+    /// above, so filtering to one account narrows this to that account.
+    private var accountTotals: [AccountSpending] {
+        store.data.accounts.compactMap { account in
+            let rows = store.expenses.filter { $0.accountID == account.id }
+            guard !rows.isEmpty else { return nil }
+            let categories = Dictionary(grouping: rows, by: \.category)
+                .map { (category: $0.key, amount: $0.value.reduce(0) { $0 + $1.amount }) }
+                .sorted { $0.amount > $1.amount }
+            return AccountSpending(account: account, amount: rows.reduce(0) { $0 + $1.amount }, count: rows.count, categories: categories)
+        }.sorted { $0.amount > $1.amount }
+    }
+
+    private var accountBreakdown: some View {
+        VStack(spacing: 18) {
+            ForEach(accountTotals, id: \.account.id) { entry in
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 11) {
+                        Image(systemName: entry.account.symbol).font(.system(size: 13, weight: .light))
+                            .frame(width: 30, height: 30).background(Palette.sage, in: RoundedRectangle(cornerRadius: 9))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.account.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            Text("\(entry.count) transaction\(entry.count == 1 ? "" : "s") · balance \(Money.format(store.balance(entry.account)))")
+                                .font(.system(size: 9)).foregroundStyle(Palette.muted).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text(Money.format(entry.amount)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                            Text("\(share(entry.amount))% of spending").font(.system(size: 9)).foregroundStyle(Palette.muted)
+                        }
+                    }
+                    ProgressTrack(value: Double(entry.amount) / Double(max(store.spent, 1)),
+                                  color: Palette.colors[entry.account.colorIndex % Palette.colors.count], height: 4)
+                    VStack(spacing: 6) {
+                        ForEach(entry.categories.prefix(4), id: \.category) { item in
+                            HStack(spacing: 8) {
+                                Circle().fill(item.category.color).frame(width: 6, height: 6)
+                                Text(item.category.rawValue).font(.system(size: 10)).foregroundStyle(Palette.muted)
+                                Spacer(minLength: 4)
+                                Text(Money.format(item.amount)).font(.system(size: 10, weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted)
+                            }
+                        }
+                        if entry.categories.count > 4 {
+                            HStack {
+                                Text("\(entry.categories.count - 4) more categor\(entry.categories.count - 4 == 1 ? "y" : "ies")")
+                                    .font(.system(size: 9)).foregroundStyle(Palette.muted)
+                                Spacer()
+                            }
+                        }
+                    }
+                }.accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(entry.account.name), \(Money.format(entry.amount)) across \(entry.count) transactions, \(share(entry.amount)) percent of spending")
+            }
+        }
+    }
+
+    private func share(_ amount: Int) -> Int {
+        Int((Double(amount) / Double(max(store.spent, 1)) * 100).rounded())
+    }
+
     private var insightTitle: String {
         guard let biggest = store.categoryTotals.first else { return "Every little detail adds up." }
         return "\(biggest.category.rawValue) leads the way."

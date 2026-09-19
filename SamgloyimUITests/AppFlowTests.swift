@@ -144,6 +144,32 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["This receipt is now filed with Chipotle · $14.85."].exists)
     }
 
+    func testFollowYourMoneyCanBreakDownByAccount() {
+        tap(app.buttons["tab-Insights"])
+        XCTAssertTrue(app.buttons["flow-By account"].waitForExistence(timeout: 5))
+        tap(app.buttons["flow-By account"])
+        let row = app.otherElements.matching(NSPredicate(format: "label CONTAINS 'percent of spending'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "Each account should report its own share of spending")
+        screenshot("Spending by account")
+        tap(app.buttons["flow-Flow"])
+        XCTAssertTrue(app.staticTexts["ACCOUNTS"].waitForExistence(timeout: 5))
+    }
+
+    func testManualTransactionShowsItsTime() {
+        tap(app.buttons["add-expense"])
+        fill("transaction-amount", "9.99")
+        fill("transaction-merchant", "Timed Coffee")
+        tap(app.buttons["save-transaction"])
+        tap(app.buttons["tab-Activity"])
+        fill("transaction-search", "Timed Coffee")
+        app.textFields["transaction-search"].typeText("\n")
+        XCTAssertTrue(app.staticTexts["Timed Coffee"].waitForExistence(timeout: 5))
+        // Manual entries carry a real clock time; imported rows land on midnight and stay date-only.
+        let timed = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", ".*\\d{1,2}:\\d{2}.*")).firstMatch
+        XCTAssertTrue(timed.waitForExistence(timeout: 5), "A manually added transaction should show the time it was recorded")
+        screenshot("Activity with time")
+    }
+
     func testScreensAndCategoryDrilldown() {
         screenshot("Overview")
         tap(app.buttons["tab-Activity"])

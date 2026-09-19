@@ -16,8 +16,9 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 ## What works
 
 - Monthly spending overview, cumulative chart, and category donut.
-- Account filters and an account-to-category flow diagram inspired by the PDF.
-- Add, edit, delete, and search expenses and income; category and type filters.
+- Account filters and an account-to-category flow diagram inspired by the PDF. **Follow your money** switches between that flow and a per-account breakdown showing each account's spend, share, transaction count, balance, and category split.
+- Add, edit, delete, and search expenses and income; category and type filters. Transactions record a time as well as a date; rows show it only when one exists, since imported rows carry a date alone.
+- Import review shows where each row came from and which account it lands in, so a sync spanning two banks stays readable.
 - Create and edit local accounts with opening balances.
 - Receipt OCR from multiple Photos or Files images. Every reading must be opened, checked, and saved before import. OCR reads merchant, date, and receipt total; it does not itemize mixed-category receipts.
 - Photograph a receipt and match it to a card purchase. The total must equal a purchase exactly; a near miss is never rounded onto the closest one. When nothing matches, several purchases tie, or the suggestion is wrong, you pick the purchase yourself — or save the receipt as a new one.

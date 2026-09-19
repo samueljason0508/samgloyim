@@ -120,6 +120,15 @@ struct Transaction: Identifiable, Codable, Equatable {
     var receipt: ReceiptAttachment?
 }
 
+extension Transaction {
+    /// Bank sync, CSV rows, and receipts carry a calendar date but no clock time, so they land on
+    /// midnight. Rendering "12:00 AM" for those would invent precision the source never had.
+    var recordedTime: Date? {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return parts.hour == 0 && parts.minute == 0 ? nil : date
+    }
+}
+
 struct FinanceData: Codable, Equatable {
     /// v2 added `Transaction.receipt`. Older saves decode unchanged because the field is optional.
     static let currentSchemaVersion = 2

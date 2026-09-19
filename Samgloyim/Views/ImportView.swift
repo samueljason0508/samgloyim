@@ -131,6 +131,14 @@ struct ImportView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { Text(transaction.merchant).font(.system(size: 14, weight: .semibold)); Spacer(); Text(transaction.amount > 0 ? Money.format(transaction.amount) : "Add total").font(.system(size: 13, weight: .semibold)) }
                             Text("\(transaction.date.formatted(.dateTime.month(.abbreviated).day())) · \(transaction.category.rawValue)").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                            HStack(spacing: 5) {
+                                Image(systemName: "building.columns.fill").font(.system(size: 9))
+                                Text(origin(of: transaction)).lineLimit(1)
+                                Image(systemName: "arrow.right").font(.system(size: 8))
+                                Text(store.account(transaction.accountID)?.name ?? "Account").lineLimit(1)
+                            }.font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.forest)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("From \(origin(of: transaction)), into \(store.account(transaction.accountID)?.name ?? "Account")")
                             if duplicateIDs.contains(transaction.id) { Label("Possible duplicate", systemImage: "doc.on.doc").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.orange) }
                             if transaction.source == .receipt { Label(reviewedIDs.contains(transaction.id) ? "Reviewed" : "Tap to check the receipt reading", systemImage: reviewedIDs.contains(transaction.id) ? "checkmark" : "pencil").font(.system(size: 10)).foregroundStyle(reviewedIDs.contains(transaction.id) ? Palette.forest : Palette.orange) }
                         }.contentShape(Rectangle())
@@ -151,6 +159,15 @@ struct ImportView: View {
             PrimaryButton(title: "Back to my money") { dismiss() }
         }.padding(.vertical, 50).frame(maxWidth: .infinity)
     }
+    /// Where a row came from. A bank sync can pull several institutions into one local account,
+    /// so the institution — which the sync puts in the note — is the only thing that tells two
+    /// banks' rows apart during review.
+    private func origin(of transaction: Transaction) -> String {
+        guard transaction.source == .plaid else { return transaction.source.rawValue }
+        let note = transaction.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty ? "Bank" : note
+    }
+
     private func prepare(_ result: ImportResult) {
         candidates = result.transactions; warnings = result.warnings; reviewedIDs = []
         selectedIDs = Set(candidates.filter { $0.amount > 0 && !duplicateIDs.contains($0.id) }.map(\.id))

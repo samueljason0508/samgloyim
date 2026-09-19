@@ -136,7 +136,10 @@ struct TransactionRow: View {
             VStack(alignment: .trailing, spacing: 5) {
                 Text("\(transaction.kind == .income ? "+" : "−")\(Money.format(transaction.amount))").font(.system(size: 14, weight: .semibold)).monospacedDigit()
                     .foregroundStyle(transaction.kind == .income ? Palette.forest : Palette.ink)
-                Text(transaction.date.formatted(.dateTime.month(.abbreviated).day())).font(.system(size: 10)).foregroundStyle(Palette.muted)
+                Text(transaction.recordedTime == nil
+                     ? transaction.date.formatted(.dateTime.month(.abbreviated).day())
+                     : transaction.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                    .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
             }
         }.padding(.vertical, 7).contentShape(Rectangle())
     }

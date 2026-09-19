@@ -37,7 +37,7 @@ struct TransactionEditor: View {
                     TextField(kind == .income ? "Where did it come from?" : "Where did you spend?", text: $merchant).textInputAutocapitalization(.words).accessibilityIdentifier("transaction-merchant")
                 } header: { Text("The essentials") } footer: { Text("Amounts are in US dollars.") }
                 Section("Details") {
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                    DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
                     Picker("Account", selection: $accountID) {
                         ForEach(store.data.accounts) { Text($0.name).tag(Optional($0.id)) }
                     }
