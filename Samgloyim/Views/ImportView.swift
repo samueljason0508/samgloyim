@@ -19,6 +19,7 @@ struct ImportView: View {
     @State private var showingReview = false
     @State private var importedCount: Int?
     @State private var connectingBank = false
+    @State private var scanningReceipt = false
     @State private var linkedInstitutions: [String] = []
 
     private var duplicateIDs: Set<UUID> {
@@ -68,6 +69,7 @@ struct ImportView: View {
                     if let accountID { ConnectBankView(accountID: accountID) { result in prepare(result) } }
                 }
                 .onChange(of: connectingBank) { _, presented in if !presented { Task { await loadLinkedInstitutions() } } }
+                .sheet(isPresented: $scanningReceipt) { ScanReceiptView() }
         }
     }
     private var choices: some View {
@@ -86,6 +88,9 @@ struct ImportView: View {
             Button { connectingBank = true } label: {
                 importOption(symbol: "building.columns.fill", title: linkedInstitutions.isEmpty ? "Connect a bank" : "Connect another bank", detail: "Sync transactions automatically via Plaid", color: linkedInstitutions.isEmpty ? Palette.sage : Color(hex: 0xE7E1ED))
             }.buttonStyle(.plain).accessibilityIdentifier("import-plaid")
+            Button { scanningReceipt = true } label: {
+                importOption(symbol: "camera.fill", title: "Scan a receipt", detail: "Photograph one receipt and match it to a card purchase", color: Palette.lime)
+            }.buttonStyle(.plain).accessibilityIdentifier("scan-receipt")
             PhotosPicker(selection: $photos, maxSelectionCount: 10, matching: .images) {
                 importOption(symbol: "camera.viewfinder", title: "Receipt photos", detail: "Read up to 10 receipts from your library", color: Palette.sage)
             }.buttonStyle(.plain).accessibilityIdentifier("import-photos")

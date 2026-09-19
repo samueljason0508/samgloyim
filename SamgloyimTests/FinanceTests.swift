@@ -91,6 +91,99 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(ReceiptScanner.parse(lines: ["STORE", "BALANCE DUE 15.00"]).amount, 1500)
     }
 
+    func testReceiptMatchesCardPurchaseOnExactTotal() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let purchase = Transaction(merchant: "Campus Cafe", amount: 1512, date: day, category: .food, accountID: account, source: .plaid)
+        let other = Transaction(merchant: "Metro pass", amount: 340, date: day, category: .transport, accountID: account, source: .plaid)
+        let reading = ReceiptReading(merchant: "CAMPUS CAFE #204", amount: 1512, date: day, text: "")
+        let matches = ReceiptMatcher.matches(for: reading, in: [purchase, other], now: day)
+        XCTAssertEqual(matches.map(\.id), [purchase.id])
+        XCTAssertEqual(ReceiptMatcher.suggestion(from: matches)?.id, purchase.id)
+    }
+
+    func testReceiptTotalMatchingNoPurchaseIsNeverApproximated() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let purchase = Transaction(merchant: "Campus Cafe", amount: 1512, date: day, category: .food, accountID: account)
+        // A cent apart is a different purchase, not a near miss to round onto.
+        XCTAssertTrue(ReceiptMatcher.matches(for: ReceiptReading(merchant: "CAMPUS CAFE", amount: 1513, date: day, text: ""), in: [purchase], now: day).isEmpty)
+        XCTAssertTrue(ReceiptMatcher.matches(for: ReceiptReading(merchant: "CAMPUS CAFE", amount: nil, date: day, text: ""), in: [purchase], now: day).isEmpty)
+    }
+
+    func testEquallyGoodPurchasesAreLeftForTheUserToMap() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let first = Transaction(merchant: "Corner Store", amount: 900, date: day, category: .shopping, accountID: account)
+        let second = Transaction(merchant: "Corner Store", amount: 900, date: day, category: .shopping, accountID: account)
+        let matches = ReceiptMatcher.matches(for: ReceiptReading(merchant: "Corner Store", amount: 900, date: day, text: ""), in: [first, second], now: day)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertNil(ReceiptMatcher.suggestion(from: matches))
+    }
+
+    func testMatchingSkipsIncomeAlreadyReceiptedAndDistantPurchases() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let reading = ReceiptReading(merchant: "Campus Cafe", amount: 1512, date: day, text: "")
+        var receipted = Transaction(merchant: "Campus Cafe", amount: 1512, date: day, category: .food, accountID: account)
+        receipted.receipt = ReceiptAttachment(merchant: "Campus Cafe", total: 1512, purchasedAt: day, text: "")
+        let income = Transaction(merchant: "Campus Cafe", amount: 1512, date: day, category: .food, accountID: account, kind: .income)
+        let distant = Transaction(merchant: "Campus Cafe", amount: 1512, date: try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -9, to: day)), category: .food, accountID: account)
+        XCTAssertTrue(ReceiptMatcher.matches(for: reading, in: [receipted, income, distant], now: day).isEmpty)
+    }
+
+    func testPostingLagStillMatchesButWeakensTheSuggestion() throws {
+        let account = UUID()
+        let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        let posted = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 3, to: day))
+        let purchase = Transaction(merchant: "Trader Joe's", amount: 6842, date: posted, category: .groceries, accountID: account, source: .plaid)
+        let named = ReceiptMatcher.matches(for: ReceiptReading(merchant: "TRADER JOES", amount: 6842, date: day, text: ""), in: [purchase], now: day)
+        XCTAssertEqual(ReceiptMatcher.suggestion(from: named)?.id, purchase.id)
+        // Same lag without a recognizable merchant is a match worth showing, but not one to suggest.
+        let anonymous = ReceiptMatcher.matches(for: ReceiptReading(merchant: "Receipt", amount: 6842, date: day, text: ""), in: [purchase], now: day)
+        XCTAssertEqual(anonymous.count, 1)
+        XCTAssertNil(ReceiptMatcher.suggestion(from: anonymous))
+    }
+
+    @MainActor func testAttachingReceiptPersistsAndClearsTheCandidate() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        let purchase = Transaction(merchant: "Campus Cafe", amount: 1512, date: Date(), category: .food, accountID: account.id, source: .plaid)
+        XCTAssertTrue(store.save(purchase))
+        XCTAssertEqual(store.receiptCandidates.map(\.id), [purchase.id])
+        let receipt = ReceiptAttachment(merchant: "CAMPUS CAFE", total: 1512, purchasedAt: Date(), text: "TOTAL 15.12", mappedManually: true)
+        XCTAssertTrue(store.attachReceipt(receipt, to: purchase.id))
+        XCTAssertTrue(store.receiptCandidates.isEmpty)
+        XCTAssertFalse(store.attachReceipt(receipt, to: UUID()))
+
+        let reloaded = FinanceStore(fileURL: url, demo: false)
+        XCTAssertEqual(reloaded.data.transactions.first?.receipt?.total, 1512)
+        XCTAssertEqual(reloaded.data.transactions.first?.receipt?.mappedManually, true)
+        XCTAssertTrue(reloaded.removeReceipt(from: purchase.id))
+        XCTAssertNil(reloaded.data.transactions.first?.receipt)
+    }
+
+    @MainActor func testSavesFromBeforeReceiptsStillLoad() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let accountID = UUID(), transactionID = UUID()
+        let legacy = """
+        {"schemaVersion":1,"name":"friend","isDemo":false,"budgets":[],"goals":[],\
+        "accounts":[{"id":"\(accountID.uuidString)","name":"Everyday","detail":"Checking","symbol":"building.columns.fill","openingBalance":0,"colorIndex":0}],\
+        "transactions":[{"id":"\(transactionID.uuidString)","merchant":"Campus Cafe","amount":1512,"date":780000000,"category":"Food & drink",\
+        "accountID":"\(accountID.uuidString)","kind":"Expense","source":"Bank","note":""}]}
+        """
+        try Data(legacy.utf8).write(to: url)
+        let store = FinanceStore(fileURL: url, demo: false)
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(store.data.schemaVersion, FinanceData.currentSchemaVersion)
+        XCTAssertNil(store.data.transactions.first?.receipt)
+        XCTAssertEqual(store.receiptCandidates.map(\.id), [transactionID])
+    }
+
     @MainActor func testOnDeviceReceiptOCR() async throws {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 900, height: 700)).image { context in
             UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 900, height: 700))

@@ -38,6 +38,13 @@ final class AppFlowTests: XCTestCase {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
+    /// A SwiftUI `List` keeps offscreen rows out of the accessibility tree entirely, so a row
+    /// below the fold has to be scrolled into range before it can be found. How far down a
+    /// Settings row sits depends on how many accounts and banks are connected.
+    private func revealInList(_ element: XCUIElement) {
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0..<8 where !element.exists { list.swipeUp() }
+    }
 
     func testCreateEditPersistAndDeleteTransaction() {
         tap(app.buttons["add-expense"])
@@ -101,6 +108,7 @@ final class AppFlowTests: XCTestCase {
 
     func testFreshStartAndAccountCreation() {
         tap(app.buttons["Settings"])
+        revealInList(app.buttons["start-fresh"])
         tap(app.buttons["start-fresh"])
         tap(app.buttons["Clear data and start fresh"])
         XCTAssertTrue(app.staticTexts["$0.00"].firstMatch.waitForExistence(timeout: 5))
@@ -111,6 +119,49 @@ final class AppFlowTests: XCTestCase {
         tap(app.buttons["save-account"])
         XCTAssertTrue(app.staticTexts["Travel cash"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["$250.00"].waitForExistence(timeout: 5))
+    }
+
+    /// Scans the fixture receipt and stops on the match screen.
+    /// Requires it in the simulator library first:
+    /// `xcrun simctl addmedia <device> Samples/receipt_trader_joes.png`.
+    private func scanFixtureReceipt() throws {
+        tap(app.buttons["import-transactions"])
+        tap(app.buttons["scan-receipt"])
+        XCTAssertTrue(app.buttons["scan-library"].waitForExistence(timeout: 5))
+        tap(app.buttons["scan-library"])
+        // The system picker hosts its grid cells as images, newest first.
+        let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        guard photo.waitForExistence(timeout: 15) else {
+            throw XCTSkip("The system photo picker presented no images. Add the fixture with simctl addmedia.")
+        }
+        photo.tap()
+        XCTAssertTrue(app.staticTexts["We found a match"].waitForExistence(timeout: 25))
+    }
+
+    /// The fixture's $68.42 total matches the Trader Joe's purchase in the sample data.
+    func testScannedReceiptMapsToCardPurchase() throws {
+        try scanFixtureReceipt()
+        XCTAssertTrue(app.staticTexts["Trader Joe’s"].exists)
+        XCTAssertTrue(app.staticTexts["$68.42"].firstMatch.exists)
+        screenshot("Receipt matched to purchase")
+        tap(app.buttons["confirm-match"])
+        XCTAssertTrue(app.staticTexts["Matched."].waitForExistence(timeout: 5))
+        screenshot("Receipt attached")
+    }
+
+    func testUserCanMapAReceiptToADifferentPurchaseByHand() throws {
+        try scanFixtureReceipt()
+        tap(app.buttons["Pick a different purchase"])
+        XCTAssertTrue(app.textFields["purchase-search"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["confirm-manual-match"].isEnabled, "Nothing is attached until the user picks a purchase")
+        fill("purchase-search", "Chipotle")
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Map receipt to Chipotle'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        screenshot("Mapping a receipt by hand")
+        tap(app.buttons["confirm-manual-match"])
+        XCTAssertTrue(app.staticTexts["Matched."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This receipt is now filed with Chipotle · $14.85."].exists)
     }
 
     func testScreensAndCategoryDrilldown() {

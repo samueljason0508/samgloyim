@@ -14,8 +14,9 @@ final class FinanceStore: ObservableObject {
         self.fileURL = fileURL ?? Self.defaultURL
         do {
             if FileManager.default.fileExists(atPath: self.fileURL.path) {
-                let decoded = try JSONDecoder().decode(FinanceData.self, from: Data(contentsOf: self.fileURL))
-                guard decoded.schemaVersion == 1 else { throw CocoaError(.fileReadCorruptFile) }
+                var decoded = try JSONDecoder().decode(FinanceData.self, from: Data(contentsOf: self.fileURL))
+                guard decoded.schemaVersion <= FinanceData.currentSchemaVersion else { throw CocoaError(.fileReadCorruptFile) }
+                decoded.schemaVersion = FinanceData.currentSchemaVersion
                 data = decoded
             } else {
                 data = demo ? .sample() : .empty()
@@ -94,6 +95,23 @@ final class FinanceStore: ObservableObject {
         return update { $0.transactions.append(contentsOf: transactions) }
     }
     @discardableResult func deleteTransaction(_ id: UUID) -> Bool { update { $0.transactions.removeAll { $0.id == id } } }
+    /// Card purchases a scanned receipt can still be mapped to, newest first.
+    var receiptCandidates: [Transaction] {
+        ReceiptMatcher.candidates(in: data.transactions).sorted { $0.date > $1.date }
+    }
+    @discardableResult func attachReceipt(_ receipt: ReceiptAttachment, to id: UUID) -> Bool {
+        guard data.transactions.contains(where: { $0.id == id }) else { return false }
+        return update { data in
+            guard let index = data.transactions.firstIndex(where: { $0.id == id }) else { return }
+            data.transactions[index].receipt = receipt
+        }
+    }
+    @discardableResult func removeReceipt(from id: UUID) -> Bool {
+        update { data in
+            guard let index = data.transactions.firstIndex(where: { $0.id == id }) else { return }
+            data.transactions[index].receipt = nil
+        }
+    }
     @discardableResult func saveAccount(_ account: BankAccount) -> Bool {
         update { data in
             if let index = data.accounts.firstIndex(where: { $0.id == account.id }) { data.accounts[index] = account }

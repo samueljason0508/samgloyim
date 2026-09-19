@@ -122,7 +122,13 @@ struct TransactionRow: View {
                 Image(systemName: "arrow.down.left").font(.system(size: 17, weight: .medium)).frame(width: 44, height: 44).background(Palette.sage, in: RoundedRectangle(cornerRadius: 14))
             } else { CategoryIcon(category: transaction.category) }
             VStack(alignment: .leading, spacing: 5) {
-                Text(transaction.merchant).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(transaction.merchant).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                    if transaction.receipt != nil {
+                        Image(systemName: "paperclip").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.forest)
+                            .accessibilityLabel("Receipt attached")
+                    }
+                }
                 Text("\(transaction.kind == .income ? "Income" : transaction.category.rawValue) · \(store.account(transaction.accountID)?.name ?? "Account")")
                     .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
             }

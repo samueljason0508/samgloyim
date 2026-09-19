@@ -96,6 +96,17 @@ struct BankAccount: Identifiable, Codable, Equatable {
     var colorIndex: Int = 0
 }
 
+/// A reviewed receipt reading kept alongside the purchase it belongs to. The original
+/// image is never stored — only the fields the user confirmed and the extracted text.
+struct ReceiptAttachment: Codable, Equatable {
+    var scannedAt: Date = Date()
+    var merchant: String
+    var total: Int?
+    var purchasedAt: Date?
+    var text: String
+    var mappedManually: Bool = false
+}
+
 struct Transaction: Identifiable, Codable, Equatable {
     var id = UUID()
     var merchant: String
@@ -106,6 +117,7 @@ struct Transaction: Identifiable, Codable, Equatable {
     var kind: TransactionKind = .expense
     var source: TransactionSource = .manual
     var note: String = ""
+    var receipt: ReceiptAttachment?
 }
 
 struct Budget: Identifiable, Codable, Equatable {
@@ -123,7 +135,10 @@ struct SavingsGoal: Identifiable, Codable, Equatable {
 }
 
 struct FinanceData: Codable, Equatable {
-    var schemaVersion: Int = 1
+    /// v2 added `Transaction.receipt`. Older saves decode unchanged because the field is optional.
+    static let currentSchemaVersion = 2
+
+    var schemaVersion: Int = currentSchemaVersion
     var name: String = "friend"
     var accounts: [BankAccount] = []
     var transactions: [Transaction] = []

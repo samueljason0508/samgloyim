@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCameraUsageDescription</key>
+	<string>samgloyim uses the camera to photograph receipts so it can read the total and match it to one of your purchases. Photos are read on your device and are not stored or uploaded.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- Dev-only: lets the app reach the local Plaid backend at http://localhost during development.

@@ -22,6 +22,7 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - Category budgets with remaining amounts and overspend states.
 - Savings goals with editable targets and progress.
 - Receipt OCR from multiple Photos or Files images. Every reading must be opened, checked, and saved before import. OCR reads merchant, date, and receipt total; it does not itemize mixed-category receipts.
+- Photograph a receipt and match it to a card purchase. The total must equal a purchase exactly; a near miss is never rounded onto the closest one. When nothing matches, several purchases tie, or the suggestion is wrong, you pick the purchase yourself — or save the receipt as a new one.
 - CSV import with review, row-level validation, inferred categories, and possible duplicate detection. Invalid rows are listed; they are never silently imported.
 - CSV export through the system Files picker.
 - Calculated monthly insights and short financial-literacy lessons.
@@ -51,6 +52,20 @@ date,merchant,amount,category,account,kind,note
 - Formula-like text fields are prefixed with an apostrophe during export to prevent spreadsheet formula evaluation.
 - Review dates, merchant names, amounts, accounts, and categories before importing. Duplicate suggestions require the same normalized merchant, exact amount, calendar day, type, and account. Different bank posting dates or merchant names may not match. Duplicates start unchecked; the user can keep legitimate repeated purchases.
 - To test receipt photos in Simulator, drag an image into Simulator to add it to Photos, then choose **Receipt photos**. A fictional receipt is included in `Samples/receipt.png`.
+
+## Match a receipt to a card purchase
+
+**Overview → Import → Scan a receipt** photographs a receipt, reads it on device, and files it against the purchase it belongs to. Simulators have no camera, so the screen offers the photo library instead.
+
+A purchase is only suggested when its amount equals the receipt total to the cent, it falls within four days of the receipt date (card networks post a few days late), and it doesn't already carry a receipt. Income is never matched. Two equally good purchases are treated as no match rather than a coin flip. Everything else — no match, a tie, or a wrong suggestion — is mapped by hand from a searchable list, or saved as a new purchase.
+
+Attaching keeps the confirmed merchant, total, date, and extracted text next to the purchase; the image itself is not stored. Matched purchases show a paperclip in Activity.
+
+`Samples/receipt_trader_joes.png` totals $68.42, which matches the sample Trader Joe's purchase. Load it before running the receipt UI tests:
+
+```sh
+xcrun simctl addmedia booted Samples/receipt_trader_joes.png
+```
 
 ## Data and scope
 
