@@ -96,10 +96,26 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
     /// Money moving between the user's own accounts, or paying off a card whose purchases are
     /// already recorded. Counting these as spending double-counts and, in the case of a large
     /// account transfer, swamps every real number on the screen.
+    ///
+    /// Paying a person is not one of these. Zelle, Venmo and the like leave under `TRANSFER_OUT`
+    /// beside genuine self-transfers, so the outgoing side is decided on the detailed category:
+    /// only a move to the user's own account, savings, investments or cash is excluded. Incoming
+    /// transfers stay excluded whatever their detail — a repayment or a deposit from the user's
+    /// other bank is not earnings, and treating it as income would overstate what they made.
     static func isTransfer(primary: String?, detailed: String?) -> Bool {
         if detailed == "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" { return true }
         guard let primary else { return false }
-        return primary == "TRANSFER_IN" || primary == "TRANSFER_OUT"
+        if primary == "TRANSFER_IN" { return true }
+        guard primary == "TRANSFER_OUT" else { return false }
+        switch detailed {
+        case "TRANSFER_OUT_ACCOUNT_TRANSFER", "TRANSFER_OUT_SAVINGS",
+             "TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS", "TRANSFER_OUT_WITHDRAWAL":
+            return true
+        default:
+            // Without a detailed category there is nothing to tell the two apart, so assume the
+            // common case rather than inflating spending with the user's own money.
+            return detailed == nil
+        }
     }
 }
 

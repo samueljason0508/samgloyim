@@ -173,8 +173,17 @@ final class FinanceTests: XCTestCase {
         let store = FinanceStore(fileURL: url, demo: false)
         let account = try XCTUnwrap(store.data.accounts.first)
         XCTAssertTrue(SpendingCategory.isTransfer(primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"))
-        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: nil))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER"))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_WITHDRAWAL"))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: nil), "Nothing to tell a self-transfer apart on")
         XCTAssertFalse(SpendingCategory.isTransfer(primary: "FOOD_AND_DRINK", detailed: "FOOD_AND_DRINK_COFFEE"))
+
+        // Zelle to a person is money spent, even though Plaid files it beside genuine transfers.
+        XCTAssertFalse(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_TRANSFER_OUT_FROM_APPS"))
+        XCTAssertFalse(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_OTHER_TRANSFER_OUT"))
+        // Incoming stays out of income: a repayment, or the user's own money arriving, is not earnings.
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_IN", detailed: "TRANSFER_IN_TRANSFER_IN_FROM_APPS"))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_IN", detailed: "TRANSFER_IN_OTHER_TRANSFER_IN"))
 
         var payment = Transaction(merchant: "Amex payment", amount: 120_000, date: Date(), category: .other, accountID: account.id, source: .plaid)
         payment.isTransfer = true
