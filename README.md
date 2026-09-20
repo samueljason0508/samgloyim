@@ -75,9 +75,10 @@ ranks your cards for what that place sells. Location is used while the app is op
 backend.
 
 Earn rates are not hard-coded to any particular card. `POST /api/card-rewards` looks up whatever card your bank reported — Plaid's
-`official_name`, e.g. "Blue Cash Everyday®" — from what the issuer publishes, and caches the answer for two weeks. That needs
-`ANTHROPIC_API_KEY` in `backend/.env`; without it the lookup returns a clear error and you enter rates by hand in Settings → the
-account → Rewards. Either way the rates are yours to correct, and every one carries the window it applies to: a rate outside its
+`official_name`, e.g. "Blue Cash Everyday®" — from what the issuer publishes, and caches the answer for two weeks. That needs `GEMINI_API_KEY` in `backend/.env` — a Google AI Studio key, whose free tier covers 5,000 grounded lookups a month.
+Without it, or without permission to ground against Google Search, the lookup returns a clear error and you enter rates by hand in
+Settings → the account → Rewards. It never falls back to an ungrounded answer: a model recalling last year's rotating categories from
+memory is worse than no answer at all. Either way the rates are yours to correct, and every one carries the window it applies to: a rate outside its
 window does not count, and one that has just lapsed is called out rather than quietly dropped.
 
 Only credit cards are ranked. A tie is left as a tie instead of picking a winner.

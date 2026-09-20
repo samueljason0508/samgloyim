@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Configuration, PlaidApi, PlaidEnvironments } = require('plaid');
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenAI } = require('@google/genai');
 
 const PLAID_ENV = process.env.PLAID_ENV || 'sandbox';
 const KEY = Buffer.from(process.env.STORAGE_ENCRYPTION_KEY || '', 'hex');
@@ -209,37 +209,16 @@ function loadRewards() {
   }
 }
 
-function extractJSON(message) {
-  const texts = message.content.filter((b) => b.type === 'text').map((b) => b.text);
-  const raw = texts.join('\n');
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
+// A grounded answer arrives as prose around the JSON, often fenced, so take the outermost object
+// rather than trusting the whole reply to parse.
+function extractJSON(text) {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
   if (start === -1 || end === -1) throw new Error('No JSON object in the reply');
-  return JSON.parse(raw.slice(start, end + 1));
+  return JSON.parse(text.slice(start, end + 1));
 }
 
-app.post('/api/card-rewards', async (req, res) => {
-  const card = String(req.body?.card || '').trim();
-  if (!card) return res.status(400).json({ error: 'A card name is required' });
-
-  const cache = loadRewards();
-  const hit = cache[card.toLowerCase()];
-  const freshUntil = hit && new Date(hit.fetchedAt).getTime() + REWARDS_TTL_DAYS * 86400000;
-  if (hit && !req.query.refresh && freshUntil > Date.now()) return res.json({ ...hit, cached: true });
-
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    return res.status(503).json({ error: 'Rewards lookup is not configured. Set ANTHROPIC_API_KEY in backend/.env, or enter the rates by hand.' });
-  }
-
-  try {
-    const client = new Anthropic();
-    const today = new Date().toISOString().slice(0, 10);
-    const message = await client.messages.create({
-      model: 'claude-opus-5',
-      max_tokens: 16000,
-      thinking: { type: 'adaptive' },
-      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
-      system: `You look up published credit card earn rates. Today is ${today}.
+const rewardsPrompt = (today) => `You look up published credit card earn rates. Today is ${today}.
 Search the issuer's own page first, then a reputable card-review site to confirm.
 Report only what you find. Never invent a rate, and omit any category you cannot confirm.
 A rotating category (Discover-style) must carry the exact quarter it applies to; a rate with no
@@ -251,11 +230,44 @@ Reply with one JSON object and nothing else:
 Map each published category onto the closest one in that list: supermarkets to Groceries,
 restaurants and dining to Food & drink, gas and transit and flights to Transport, online retail and
 department stores to Shopping, utilities and streaming bills to Home & bills, and so on. Points are
-counted at one cent each.`,
-      messages: [{ role: 'user', content: `What does the "${card}" card earn, by category, right now?` }],
+counted at one cent each.`;
+
+app.post('/api/card-rewards', async (req, res) => {
+  const card = String(req.body?.card || '').trim();
+  if (!card) return res.status(400).json({ error: 'A card name is required' });
+
+  const cache = loadRewards();
+  const hit = cache[card.toLowerCase()];
+  const freshUntil = hit && new Date(hit.fetchedAt).getTime() + REWARDS_TTL_DAYS * 86400000;
+  if (hit && !req.query.refresh && freshUntil > Date.now()) return res.json({ ...hit, cached: true });
+
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(503).json({ error: 'Rewards lookup is not configured. Set GEMINI_API_KEY in backend/.env, or enter the rates by hand.' });
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const response = await ai.models.generateContent({
+      model: 'gemini-flash-latest',
+      // Search grounding is what makes this work for a card nobody wrote into the app. The API
+      // refuses to mix a search tool with any other, so the JSON shape is asked for in the prompt
+      // rather than enforced by a response schema.
+      config: {
+        tools: [{ googleSearch: {} }],
+        systemInstruction: rewardsPrompt(new Date().toISOString().slice(0, 10)),
+      },
+      contents: `What does the "${card}" card earn, by category, right now?`,
     });
 
-    const parsed = extractJSON(message);
+    // An unknown tool key is dropped silently rather than rejected, and the model then answers from
+    // memory — which for a rotating quarterly category is confidently wrong data with no warning.
+    // Grounding metadata is the proof a search actually happened; without it, refuse the answer.
+    const grounded = response.candidates?.[0]?.groundingMetadata;
+    if (!grounded?.groundingChunks?.length && !grounded?.webSearchQueries?.length) {
+      throw new Error('The model answered without searching, so the rates cannot be trusted');
+    }
+
+    const parsed = extractJSON(response.text);
     const entry = { card, fetchedAt: new Date().toISOString(), ...parsed };
     cache[card.toLowerCase()] = entry;
     fs.mkdirSync(DATA_DIR, { recursive: true });
