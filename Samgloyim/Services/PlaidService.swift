@@ -23,9 +23,11 @@ struct PlaidTransactionPayload: Decodable {
     }
 }
 
+/// One sync as the bank reported it. Rows stay as payloads: which account each belongs to is the
+/// ledger's business, not the network layer's, and a payload knows only its institution.
 struct PlaidSync {
-    var added: [Transaction] = []
-    var modified: [Transaction] = []
+    var added: [PlaidTransactionPayload] = []
+    var modified: [PlaidTransactionPayload] = []
     var removed: [String] = []
     var isEmpty: Bool { added.isEmpty && modified.isEmpty && removed.isEmpty }
 }
@@ -101,13 +103,11 @@ enum PlaidService {
 
     /// A sync reports new rows, corrections to rows it sent before, and rows that never posted.
     /// Dropping the last two leaves pending purchases frozen at their raw card descriptor.
-    static func fetchSync(accountID: UUID) async throws -> PlaidSync {
+    static func fetchSync() async throws -> PlaidSync {
         let (data, response) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/transactions"))
         try validate(response)
         let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
-        return PlaidSync(added: decoded.added.map { $0.toTransaction(accountID: accountID) },
-                         modified: decoded.modified.map { $0.toTransaction(accountID: accountID) },
-                         removed: decoded.removed)
+        return PlaidSync(added: decoded.added, modified: decoded.modified, removed: decoded.removed)
     }
 
     private static func post(_ path: String, body: [String: String]) async throws -> Data {

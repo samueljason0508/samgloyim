@@ -144,19 +144,13 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["This receipt is now filed with Chipotle · $14.85."].exists)
     }
 
-    func testFollowYourMoneyCanBreakDownByAccountAndByBank() {
+    func testFollowYourMoneyCanBreakDownByAccount() {
         tap(app.buttons["tab-Insights"])
         XCTAssertTrue(app.buttons["flow-Account"].waitForExistence(timeout: 5))
-        let share = app.otherElements.matching(NSPredicate(format: "label CONTAINS 'percent of spending'"))
-
         tap(app.buttons["flow-Account"])
+        let share = app.otherElements.matching(NSPredicate(format: "label CONTAINS 'percent of spending'"))
         XCTAssertTrue(share.firstMatch.waitForExistence(timeout: 5), "Each account should report its own share of spending")
         screenshot("Spending by account")
-
-        tap(app.buttons["flow-Bank"])
-        XCTAssertTrue(share.firstMatch.waitForExistence(timeout: 5), "Each origin should report its own share of spending")
-        screenshot("Spending by bank")
-
         tap(app.buttons["flow-Flow"])
         XCTAssertTrue(app.staticTexts["ACCOUNTS"].waitForExistence(timeout: 5))
     }

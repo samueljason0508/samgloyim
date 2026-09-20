@@ -118,6 +118,9 @@ struct BankAccount: Identifiable, Codable, Equatable {
     var symbol: String = "building.columns.fill"
     var openingBalance: Int = 0
     var colorIndex: Int = 0
+    /// The bank this account mirrors. Nil means it is kept by hand — cash, or anything not synced.
+    /// A sync files each institution into its own account, so this is how one is found again.
+    var institution: String?
 }
 
 /// A reviewed receipt reading kept alongside the purchase it belongs to. The original
@@ -177,7 +180,8 @@ extension Transaction {
 struct FinanceData: Codable, Equatable {
     /// v2 added `Transaction.receipt`. Older saves decode unchanged because the field is optional.
     /// v3 repaired bank rows stored a day early by the UTC date-parsing bug.
-    static let currentSchemaVersion = 3
+    /// v4 gave every bank its own account, replacing the single catch-all the sync filed into.
+    static let currentSchemaVersion = 4
 
     var schemaVersion: Int = currentSchemaVersion
     var name: String = "friend"
@@ -185,8 +189,13 @@ struct FinanceData: Codable, Equatable {
     var transactions: [Transaction] = []
     var isDemo: Bool = false
 
+    /// Cash is the home for anything entered by hand. Synced banks add their own accounts.
+    static func cashAccount() -> BankAccount {
+        BankAccount(name: "Cash", detail: "Entered by hand", symbol: "banknote.fill")
+    }
+
     static func empty() -> Self {
-        FinanceData(accounts: [BankAccount(name: "Everyday", detail: "Personal account")])
+        FinanceData(accounts: [cashAccount()])
     }
 
     static func sample(now: Date = Date()) -> Self {

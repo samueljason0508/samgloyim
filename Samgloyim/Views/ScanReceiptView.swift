@@ -261,7 +261,7 @@ struct ScanReceiptView: View {
 
     private func saveAsNew() {
         guard let reading, let total = reading.amount, total > 0,
-              let accountID = store.selectedAccountID ?? store.data.accounts.first?.id else {
+              let accountID = store.cashAccountID else {
             error = "This receipt has no readable total, so it can only be attached to an existing purchase."
             return
         }

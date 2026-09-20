@@ -1,7 +1,7 @@
 import SwiftUI
 import Charts
 
-enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "Account", banks = "Bank" }
+enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "Account" }
 
 struct InsightsView: View {
     @EnvironmentObject var store: FinanceStore
@@ -37,7 +37,7 @@ struct InsightsView: View {
                         MoneyFlowView(transactions: store.expenses, accounts: store.data.accounts).frame(height: 215)
                         HStack { Text("ACCOUNTS"); Spacer(); Text("SPENDING") }.font(.system(size: 8, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
                     } else {
-                        breakdown(of: flowMode == .banks ? bankGroups : accountGroups)
+                        breakdown(of: accountGroups)
                     }
                 }.pocketCard(padding: 18)
                 VStack(alignment: .leading, spacing: 16) {
@@ -80,11 +80,7 @@ struct InsightsView: View {
         }.pageBackground().toolbar(.hidden, for: .navigationBar).sheet(item: $lesson) { LessonView(lesson: $0) }
     }
     private var flowSubtitle: String {
-        switch flowMode {
-        case .flow: "From each account to the things in your life."
-        case .accounts: "What each account carried this month."
-        case .banks: "What each bank carried this month."
-        }
+        flowMode == .flow ? "From each account to the things in your life." : "What each account carried this month."
     }
 
     private struct SpendingGroup: Identifiable {
@@ -114,20 +110,6 @@ struct InsightsView: View {
             return SpendingGroup(id: account.id.uuidString, name: account.name,
                                  detail: "\(totals.count) transaction\(totals.count == 1 ? "" : "s") · balance \(Money.format(store.balance(account)))",
                                  symbol: account.symbol, color: Palette.colors[account.colorIndex % Palette.colors.count],
-                                 amount: totals.amount, count: totals.count, categories: totals.categories)
-        }.sorted { $0.amount > $1.amount }
-    }
-
-    /// A sync pulls every linked institution into one local account, so grouping by account can
-    /// collapse four banks into a single row. This splits them back out by where they came from.
-    private var bankGroups: [SpendingGroup] {
-        Dictionary(grouping: store.expenses, by: \.originName).map { origin, rows in
-            let totals = group(rows)
-            let synced = rows.contains { $0.institutionName != nil }
-            return SpendingGroup(id: origin, name: origin,
-                                 detail: "\(totals.count) transaction\(totals.count == 1 ? "" : "s")" + (synced ? " · synced" : " · added by hand"),
-                                 symbol: synced ? "building.columns.fill" : "square.and.pencil",
-                                 color: Palette.colors[Self.colorIndex(for: origin)],
                                  amount: totals.amount, count: totals.count, categories: totals.categories)
         }.sorted { $0.amount > $1.amount }
     }
@@ -171,11 +153,6 @@ struct InsightsView: View {
                     .accessibilityLabel("\(entry.name), \(Money.format(entry.amount)) across \(entry.count) transactions, \(share(entry.amount)) percent of spending")
             }
         }
-    }
-
-    /// Swift's `hashValue` is seeded per process, so a bank would change colour on every launch.
-    static func colorIndex(for name: String) -> Int {
-        Int(name.unicodeScalars.reduce(UInt32(7)) { $0 &* 31 &+ $1.value } % UInt32(Palette.colors.count))
     }
 
     private func share(_ amount: Int) -> Int {

@@ -47,7 +47,7 @@ struct ImportView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(importedCount == nil ? "Cancel" : "Done") { dismiss() }.disabled(busy) } }
                 .interactiveDismissDisabled(busy)
-                .onAppear { accountID = store.selectedAccountID ?? store.data.accounts.first?.id }
+                .onAppear { accountID = store.cashAccountID }
                 .task { await loadLinkedInstitutions() }
                 .onChange(of: photos) { _, items in if !items.isEmpty { Task { await readPhotos(items) } } }
                 .fileImporter(isPresented: $filePicker, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
@@ -66,7 +66,7 @@ struct ImportView: View {
                 }
                 .alert("Import needs attention", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") { error = nil } } message: { Text(error ?? "Try another file.") }
                 .sheet(isPresented: $connectingBank) {
-                    if let accountID { ConnectBankView(accountID: accountID) { result in prepare(result) } }
+                    ConnectBankView { result in prepare(result) }
                 }
                 .onChange(of: connectingBank) { _, presented in if !presented { Task { await loadLinkedInstitutions() } } }
                 .sheet(isPresented: $scanningReceipt) { ScanReceiptView() }
@@ -77,7 +77,8 @@ struct ImportView: View {
             Text("Less typing.\nMore perspective.").font(.system(size: 34, design: .serif)).tracking(-0.7)
             Text("Bank sync and receipts, in one clear picture. You’ll review everything before it’s added.").font(.system(size: 14)).foregroundStyle(Palette.muted).lineSpacing(4)
             VStack(alignment: .leading, spacing: 8) {
-                Text("ADD TO ACCOUNT").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
+                Text("RECEIPTS AND FILES GO TO").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.3).foregroundStyle(Palette.muted)
+                // A synced bank files into its own account; this only covers what has no bank behind it.
                 Picker("Default account", selection: $accountID) { ForEach(store.data.accounts) { Text($0.name).tag(Optional($0.id)) } }.pickerStyle(.menu).frame(maxWidth: .infinity, alignment: .leading)
             }.pocketCard(padding: 15)
             if !linkedInstitutions.isEmpty {
@@ -131,14 +132,8 @@ struct ImportView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { Text(transaction.merchant).font(.system(size: 14, weight: .semibold)); Spacer(); Text(transaction.amount > 0 ? Money.format(transaction.amount) : "Add total").font(.system(size: 13, weight: .semibold)) }
                             Text("\(transaction.date.formatted(.dateTime.month(.abbreviated).day())) · \(transaction.category.rawValue)").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                            HStack(spacing: 5) {
-                                Image(systemName: "building.columns.fill").font(.system(size: 9))
-                                Text(transaction.originName).lineLimit(1)
-                                Image(systemName: "arrow.right").font(.system(size: 8))
-                                Text(store.account(transaction.accountID)?.name ?? "Account").lineLimit(1)
-                            }.font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.forest)
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel("From \(transaction.originName), into \(store.account(transaction.accountID)?.name ?? "Account")")
+                            Label(store.account(transaction.accountID)?.name ?? transaction.originName, systemImage: transaction.institutionName == nil ? "banknote.fill" : "building.columns.fill")
+                                .font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.forest).lineLimit(1)
                             if duplicateIDs.contains(transaction.id) { Label("Possible duplicate", systemImage: "doc.on.doc").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.orange) }
                             if transaction.source == .receipt { Label(reviewedIDs.contains(transaction.id) ? "Reviewed" : "Tap to check the receipt reading", systemImage: reviewedIDs.contains(transaction.id) ? "checkmark" : "pencil").font(.system(size: 10)).foregroundStyle(reviewedIDs.contains(transaction.id) ? Palette.forest : Palette.orange) }
                         }.contentShape(Rectangle())
@@ -212,9 +207,10 @@ struct ImportView: View {
         do {
             // New rows go to review, but corrections and reversals are applied straight away:
             // the cursor reports each one once, so anything skipped here is lost for good.
-            let sync = try await PlaidService.fetchSync(accountID: accountID)
+            let sync = try await PlaidService.fetchSync()
             store.apply(sync, addNew: false)
-            prepare(ImportResult(transactions: sync.added, warnings: sync.added.isEmpty ? ["No new transactions since your last sync."] : []))
+            let added = store.resolve(sync.added)
+            prepare(ImportResult(transactions: added, warnings: added.isEmpty ? ["No new transactions since your last sync."] : []))
         } catch { self.error = error.localizedDescription }
     }
     private func sampleImport() {

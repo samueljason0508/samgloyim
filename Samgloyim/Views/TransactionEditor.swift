@@ -70,7 +70,7 @@ struct TransactionEditor: View {
                     if let transaction {
                         merchant = transaction.merchant; amount = transaction.amount > 0 ? Money.input(transaction.amount) : ""; date = transaction.date
                         category = transaction.category; kind = transaction.kind; accountID = transaction.accountID; note = transaction.note
-                    } else { accountID = store.selectedAccountID ?? store.data.accounts.first?.id }
+                    } else { accountID = store.cashAccountID }
                 }
                 .confirmationDialog("This looks like an existing transaction", isPresented: $showDuplicate, titleVisibility: .visible) {
                     Button("Save anyway") { commit() }

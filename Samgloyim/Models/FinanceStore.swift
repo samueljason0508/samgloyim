@@ -17,6 +17,7 @@ final class FinanceStore: ObservableObject {
                 var decoded = try JSONDecoder().decode(FinanceData.self, from: Data(contentsOf: self.fileURL))
                 guard decoded.schemaVersion <= FinanceData.currentSchemaVersion else { throw CocoaError(.fileReadCorruptFile) }
                 if decoded.schemaVersion < 3 { Self.repairSyncedDates(&decoded) }
+                if decoded.schemaVersion < 4 { Self.splitAccountsByBank(&decoded) }
                 decoded.schemaVersion = FinanceData.currentSchemaVersion
                 data = decoded
             } else {
@@ -46,6 +47,45 @@ final class FinanceStore: ObservableObject {
         }
     }
 
+    /// Every synced row used to be filed into whichever single account the import picker happened
+    /// to name, so four banks collapsed into one. Give each bank its own account and move its rows
+    /// there. A hand-kept account is left alone; the leftover catch-all is dropped only when it has
+    /// nothing in it and no opening balance to lose.
+    static func splitAccountsByBank(_ data: inout FinanceData) {
+        let before = Set(data.accounts.map(\.id))
+        for index in data.transactions.indices {
+            guard let institution = data.transactions[index].institutionName else { continue }
+            data.transactions[index].accountID = accountID(forInstitution: institution, in: &data)
+        }
+        data.accounts.removeAll { account in
+            before.contains(account.id) && Self.isOldDefault(account) && account.openingBalance == 0
+                && !data.transactions.contains { $0.accountID == account.id }
+        }
+        // One the user typed into is not thrown away. It was never named by them either — it is the
+        // account the app opened on their behalf — so it becomes Cash and keeps what it holds.
+        for index in data.accounts.indices where Self.isOldDefault(data.accounts[index]) {
+            let cash = FinanceData.cashAccount()
+            data.accounts[index].name = cash.name
+            data.accounts[index].detail = cash.detail
+            data.accounts[index].symbol = cash.symbol
+        }
+        if !data.accounts.contains(where: { $0.institution == nil }) { data.accounts.append(FinanceData.cashAccount()) }
+    }
+
+    /// The catch-all the app used to open on a fresh start, matched exactly so an account the user
+    /// named themselves is never renamed out from under them.
+    private static func isOldDefault(_ account: BankAccount) -> Bool {
+        account.institution == nil && account.name == "Everyday" && account.detail == "Personal account"
+    }
+
+    /// The account mirroring one bank, opened on first sight of it.
+    static func accountID(forInstitution institution: String, in data: inout FinanceData) -> UUID {
+        if let existing = data.accounts.first(where: { $0.institution == institution }) { return existing.id }
+        let account = BankAccount(name: institution, detail: "Synced", colorIndex: data.accounts.count, institution: institution)
+        data.accounts.append(account)
+        return account.id
+    }
+
     static var defaultURL: URL {
         URL.applicationSupportDirectory.appendingPathComponent("Samgloyim", isDirectory: true).appendingPathComponent("finances.json")
     }
@@ -59,6 +99,8 @@ final class FinanceStore: ObservableObject {
                 && (accountID == nil || $0.accountID == accountID)
         }.sorted { $0.date > $1.date }
     }
+    /// Anything entered by hand belongs to Cash, not to a bank that never reported it.
+    var cashAccountID: UUID? { (data.accounts.first { $0.institution == nil } ?? data.accounts.first)?.id }
     var expenses: [Transaction] { filteredTransactions.filter { $0.kind == .expense && $0.isTransfer != true } }
     var spent: Int { expenses.reduce(0) { $0 + $1.amount } }
     var income: Int { filteredTransactions.filter { $0.kind == .income && $0.isTransfer != true }.reduce(0) { $0 + $1.amount } }
@@ -143,9 +185,8 @@ final class FinanceStore: ObservableObject {
     /// Silently pulls changes for any linked bank and merges them in.
     /// Safe to call often (app launch, foreground) — a cursor-based sync only returns what changed.
     func autoSyncPlaid() async {
-        guard let accountID = selectedAccountID ?? data.accounts.first?.id else { return }
         guard let items = try? await PlaidService.fetchLinkedItems(), !items.isEmpty else { return }
-        guard let sync = try? await PlaidService.fetchSync(accountID: accountID) else { return }
+        guard let sync = try? await PlaidService.fetchSync() else { return }
         apply(sync)
     }
 
@@ -164,7 +205,8 @@ final class FinanceStore: ObservableObject {
                 data.transactions.removeAll { $0.externalID == id }
                 changed = true
             }
-            for incoming in sync.added + sync.modified {
+            for payload in sync.added + sync.modified {
+                let incoming = payload.toTransaction(accountID: Self.accountID(forInstitution: payload.institution, in: &data))
                 if let index = Self.index(of: incoming, in: data.transactions) {
                     var existing = data.transactions[index]
                     // The bank owns these. A category the user picked by hand is left alone; only
@@ -176,6 +218,7 @@ final class FinanceStore: ObservableObject {
                     existing.isTransfer = incoming.isTransfer
                     existing.note = incoming.note
                     existing.externalID = incoming.externalID
+                    existing.accountID = incoming.accountID
                     if existing.category == .other { existing.category = incoming.category }
                     guard existing != data.transactions[index] else { continue }
                     data.transactions[index] = existing
@@ -201,9 +244,18 @@ final class FinanceStore: ObservableObject {
            let index = transactions.firstIndex(where: { $0.externalID == id }) { return index }
         return transactions.firstIndex {
             $0.source == .plaid && $0.externalID == nil && $0.amount == incoming.amount
-                && $0.kind == incoming.kind && $0.accountID == incoming.accountID
+                && $0.kind == incoming.kind && $0.institutionName == incoming.institutionName
                 && Calendar.current.isDate($0.date, inSameDayAs: incoming.date)
         }
+    }
+    /// Turns freshly synced rows into transactions for review, opening an account for any bank
+    /// not seen before so the user is reviewing rows that already know where they belong.
+    func resolve(_ payloads: [PlaidTransactionPayload]) -> [Transaction] {
+        var resolved: [Transaction] = []
+        update { data in
+            resolved = payloads.map { $0.toTransaction(accountID: Self.accountID(forInstitution: $0.institution, in: &data)) }
+        }
+        return resolved
     }
     func duplicate(of transaction: Transaction, including pending: [Transaction] = []) -> Transaction? {
         (data.transactions + pending).first { DuplicateDetector.matches($0, transaction) }

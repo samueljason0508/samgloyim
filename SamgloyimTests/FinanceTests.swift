@@ -190,22 +190,25 @@ final class FinanceTests: XCTestCase {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = FinanceStore(fileURL: url, demo: false)
-        let account = try XCTUnwrap(store.data.accounts.first)
         let raw = PlaidTransactionPayload(id: "plaid-1", merchant: "SQ *WB2 1042", amountCents: 1850, kind: "expense",
                                           date: "2026-09-18", datetime: nil, category: nil, categoryDetailed: nil,
-                                          institution: "Amex", pending: true).toTransaction(accountID: account.id)
+                                          institution: "Amex", pending: true)
         XCTAssertTrue(store.apply(PlaidSync(added: [raw])))
         XCTAssertEqual(store.data.transactions.first?.category, .other)
 
         let posted = PlaidTransactionPayload(id: "plaid-1", merchant: "Whole Foods", amountCents: 1850, kind: "expense",
                                              date: "2026-09-18", datetime: nil, category: "GROCERIES",
                                              categoryDetailed: "GROCERIES_GROCERIES", institution: "Amex",
-                                             pending: false).toTransaction(accountID: account.id)
+                                             pending: false)
         XCTAssertTrue(store.apply(PlaidSync(modified: [posted])))
         XCTAssertEqual(store.data.transactions.count, 1, "A correction must update the row, not add a second one")
         XCTAssertEqual(store.data.transactions.first?.merchant, "Whole Foods")
         XCTAssertEqual(store.data.transactions.first?.category, .groceries)
         XCTAssertEqual(store.data.transactions.first?.note, "Amex")
+        // The bank got its own account on first sight, rather than landing in the cash one.
+        let amex = try XCTUnwrap(store.data.accounts.first { $0.institution == "Amex" })
+        XCTAssertEqual(store.data.transactions.first?.accountID, amex.id)
+        XCTAssertNotEqual(amex.id, store.cashAccountID)
 
         // A category the user chose by hand is theirs, and a later sync must not overwrite it.
         var edited = try XCTUnwrap(store.data.transactions.first)
@@ -232,7 +235,7 @@ final class FinanceTests: XCTestCase {
         let incoming = PlaidTransactionPayload(id: "plaid-1", merchant: "Whole Foods", amountCents: 1850, kind: "expense",
                                                date: "2026-09-18", datetime: nil, category: "GROCERIES",
                                                categoryDetailed: "GROCERIES_GROCERIES", institution: "Amex",
-                                               pending: false).toTransaction(accountID: account.id)
+                                               pending: false)
         XCTAssertTrue(store.apply(PlaidSync(added: [incoming])))
         XCTAssertEqual(store.data.transactions.count, 2, "The replayed row should adopt the stored one, not duplicate it")
         let repaired = try XCTUnwrap(store.data.transactions.first { $0.source == .plaid })
@@ -244,6 +247,60 @@ final class FinanceTests: XCTestCase {
         let untouched = try XCTUnwrap(store.data.transactions.first { $0.source == .manual })
         XCTAssertNil(untouched.externalID)
         XCTAssertEqual(untouched.category, .other)
+    }
+
+    @MainActor func testMigrationGivesEachBankItsOwnAccount() throws {
+        let catchAll = UUID(), day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        var data = FinanceData(schemaVersion: 3, accounts: [BankAccount(id: catchAll, name: "Everyday", detail: "Personal account")],
+            transactions: [
+                Transaction(merchant: "Bagel", amount: 500, date: day, category: .food, accountID: catchAll, source: .plaid, note: "Amex"),
+                Transaction(merchant: "Coffee", amount: 400, date: day, category: .food, accountID: catchAll, source: .plaid, note: "Pending at Amex"),
+                Transaction(merchant: "Bus", amount: 300, date: day, category: .transport, accountID: catchAll, source: .plaid, note: "Chime")
+            ])
+        FinanceStore.splitAccountsByBank(&data)
+
+        let amex = try XCTUnwrap(data.accounts.first { $0.institution == "Amex" })
+        let chime = try XCTUnwrap(data.accounts.first { $0.institution == "Chime" })
+        XCTAssertEqual(data.transactions.filter { $0.accountID == amex.id }.count, 2, "Pending and posted rows belong to the same bank")
+        XCTAssertEqual(data.transactions.filter { $0.accountID == chime.id }.count, 1)
+
+        // Nothing is left in the catch-all, so it goes; hand-entered rows still need a home.
+        XCTAssertFalse(data.accounts.contains { $0.id == catchAll })
+        XCTAssertEqual(data.accounts.count, 3)
+        XCTAssertEqual(data.accounts.first { $0.institution == nil }?.name, "Cash")
+    }
+
+    @MainActor func testMigrationTurnsTheOldCatchAllIntoCashWhenItStillHoldsSomething() throws {
+        let catchAll = UUID(), day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        var data = FinanceData(schemaVersion: 3, accounts: [BankAccount(id: catchAll, name: "Everyday", detail: "Personal account")],
+            transactions: [
+                Transaction(merchant: "Bagel", amount: 500, date: day, category: .food, accountID: catchAll, source: .plaid, note: "Amex"),
+                Transaction(merchant: "Coffee", amount: 500, date: day, category: .food, accountID: catchAll, source: .manual)
+            ])
+        FinanceStore.splitAccountsByBank(&data)
+        let cash = try XCTUnwrap(data.accounts.first { $0.institution == nil })
+        XCTAssertEqual(cash.id, catchAll, "Renamed in place, so the row typed into it is not orphaned")
+        XCTAssertEqual(cash.name, "Cash")
+        XCTAssertEqual(data.transactions.first { $0.source == .manual }?.accountID, catchAll)
+        XCTAssertEqual(data.accounts.count, 2)
+    }
+
+    @MainActor func testMigrationKeepsAnAccountThatStillHoldsSomething() throws {
+        let kept = UUID(), balance = UUID(), day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
+        var data = FinanceData(schemaVersion: 3,
+            accounts: [BankAccount(id: kept, name: "Wallet", detail: "In your pocket"),
+                       BankAccount(id: balance, name: "Everyday", detail: "Checking", openingBalance: 185_000)],
+            transactions: [
+                Transaction(merchant: "Bagel", amount: 500, date: day, category: .food, accountID: kept, source: .plaid, note: "Amex"),
+                Transaction(merchant: "Tip", amount: 200, date: day, category: .food, accountID: kept, source: .manual)
+            ])
+        FinanceStore.splitAccountsByBank(&data)
+        // A hand-entered row is never reassigned to a bank it did not come from, so its account stays.
+        XCTAssertTrue(data.accounts.contains { $0.id == kept })
+        XCTAssertEqual(data.transactions.first { $0.source == .manual }?.accountID, kept)
+        // An opening balance is the user's money; dropping the account would silently lose it.
+        XCTAssertTrue(data.accounts.contains { $0.id == balance })
+        XCTAssertFalse(data.accounts.contains { $0.name == "Cash" }, "An account kept by hand already serves that purpose")
     }
 
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
