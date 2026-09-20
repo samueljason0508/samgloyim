@@ -98,6 +98,7 @@ struct ImportView: View {
             Button { filePicker = true } label: {
                 importOption(symbol: "doc.viewfinder", title: "Receipts from Files", detail: "Choose images saved on your iPhone", color: Palette.peach)
             }.buttonStyle(.plain).accessibilityIdentifier("import-receipt-files")
+            BackendAddressCard()
             Button { sampleImport() } label: { Label("Try a sample import", systemImage: "sparkles").font(.system(size: 13, weight: .semibold)).frame(maxWidth: .infinity) }.padding(.vertical, 4).accessibilityIdentifier("sample-import")
             Text("Receipt reading happens on your device. Original images aren’t stored by the app. Bank connections are read-only.").font(.system(size: 11)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).frame(maxWidth: .infinity)
         }

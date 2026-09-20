@@ -70,7 +70,45 @@ private struct SyncResponse: Decodable {
 /// client_id/secret and does the token exchange and transaction sync. This app never
 /// talks to Plaid's API directly. Backend must be running: `npm start` in `backend/`.
 enum PlaidService {
-    static let baseURL = URL(string: "http://localhost:5100")!
+    /// Where the backend lives.
+    ///
+    /// `localhost` is right on the simulator, where the app and the server share a machine. On a
+    /// real device localhost is the phone itself and nothing is listening there, so a build that
+    /// leaves the simulator needs to be told the machine's address instead — which is why this is
+    /// a setting rather than a constant.
+    static let defaultBaseURL = URL(string: "http://localhost:5100")!
+    static let addressKey = "backendAddress"
+    static var baseURL: URL { resolve(UserDefaults.standard.string(forKey: addressKey)) }
+
+    /// Typed by hand on a phone keyboard, so forgive what can be forgiven — a missing scheme,
+    /// a trailing slash, surrounding space — and fall back to the default rather than refuse to
+    /// build a URL at all. A stored address that no longer parses must not strand the app.
+    static func resolve(_ typed: String?) -> URL {
+        guard var text = typed?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return defaultBaseURL
+        }
+        if !text.contains("://") { text = "http://" + text }
+        while text.hasSuffix("/") { text.removeLast() }
+        guard let url = URL(string: text), let host = url.host, !host.isEmpty else { return defaultBaseURL }
+        return url
+    }
+
+    /// Whether the backend answers, said in a sentence the user can act on when it does not.
+    static func check() async -> String {
+        struct Health: Decodable { var ok: Bool; var env: String? }
+        var request = URLRequest(url: baseURL.appendingPathComponent("health"))
+        // A short fuse on purpose: a wrong address should say so, not sit there for a minute.
+        request.timeoutInterval = 6
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try validate(response)
+            let health = try JSONDecoder().decode(Health.self, from: data)
+            guard health.ok else { return "Answered, but reported a problem." }
+            return "Reachable — Plaid \(health.env ?? "?")"
+        } catch {
+            return "No answer from \(baseURL.absoluteString). Check the backend is running and that both devices share a network."
+        }
+    }
     /// Plaid posts a bare calendar date with no time or zone. Reading it as UTC puts the
     /// transaction at UTC midnight, which is the *previous* evening anywhere west of London —
     /// a day-early date that also lands transactions in the wrong month and stops duplicate

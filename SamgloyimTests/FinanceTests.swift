@@ -558,6 +558,20 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(store.data.transactions.first?.category, .fun, "a sync overwrote a category the user picked")
     }
 
+    func testABackendAddressTypedByHandIsForgiven() {
+        // Nothing stored, or nothing but space, means the simulator's own machine.
+        XCTAssertEqual(PlaidService.resolve(nil), PlaidService.defaultBaseURL)
+        XCTAssertEqual(PlaidService.resolve("   "), PlaidService.defaultBaseURL)
+        // A phone keyboard offers no scheme and a stray trailing slash costs nothing to accept.
+        XCTAssertEqual(PlaidService.resolve("192.168.1.42:5100").absoluteString, "http://192.168.1.42:5100")
+        XCTAssertEqual(PlaidService.resolve(" 192.168.1.42:5100/ ").absoluteString, "http://192.168.1.42:5100")
+        // An https address is left exactly as given; a hosted backend is reached that way.
+        XCTAssertEqual(PlaidService.resolve("https://samgloyim.example.com").absoluteString, "https://samgloyim.example.com")
+        // A stored address that no longer parses must not strand the app with no backend at all.
+        XCTAssertEqual(PlaidService.resolve("://"), PlaidService.defaultBaseURL)
+        XCTAssertEqual(PlaidService.resolve("http://"), PlaidService.defaultBaseURL)
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
