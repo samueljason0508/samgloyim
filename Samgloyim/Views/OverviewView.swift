@@ -9,6 +9,8 @@ struct OverviewView: View {
     var showActivity: () -> Void
     @State private var selectedTransaction: Transaction?
     @State private var showAllCategories = false
+    /// The day being traced on the chart, while a finger is down on it.
+    @State private var traced: (day: Int, amount: Double)?
 
     var body: some View {
         ScrollView {
@@ -74,13 +76,13 @@ struct OverviewView: View {
     private var spendingCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Label("MONTHLY SPENDING", systemImage: "arrow.up.right").font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.4).foregroundStyle(.white.opacity(0.7))
+                Label(tracedCaption, systemImage: traced == nil ? "arrow.up.right" : "hand.point.up.left.fill").font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.4).foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 Circle().fill(Palette.lime).frame(width: 5, height: 5)
                 Text(store.selectedAccountID == nil ? "ALL ACCOUNTS" : "ACCOUNT").font(.system(size: 8, weight: .semibold)).tracking(0.8).foregroundStyle(Palette.lime)
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(Money.format(store.spent)).font(.system(size: 43, weight: .regular, design: .rounded)).tracking(-2).minimumScaleFactor(0.6).lineLimit(1).accessibilityIdentifier("monthly-spending")
+                Text(Money.format(traced.map { Int(($0.amount * 100).rounded()) } ?? store.spent)).font(.system(size: 43, weight: .regular, design: .rounded)).tracking(-2).minimumScaleFactor(0.6).lineLimit(1).accessibilityIdentifier("monthly-spending")
                 Spacer(minLength: 0)
             }.foregroundStyle(.white)
             sparkline.frame(height: 116).accessibilityLabel("Cumulative monthly spending, by day")
@@ -92,6 +94,28 @@ struct OverviewView: View {
         return Chart(points, id: \.day) { point in
             AreaMark(x: .value("Day", point.day), y: .value("Spending", point.amount)).foregroundStyle(LinearGradient(colors: [Palette.lime.opacity(0.20), Palette.lime.opacity(0)], startPoint: .top, endPoint: .bottom)).interpolationMethod(.monotone)
             LineMark(x: .value("Day", point.day), y: .value("Spending", point.amount)).foregroundStyle(Palette.lime).lineStyle(StrokeStyle(lineWidth: 1.8)).interpolationMethod(.monotone)
+            if let traced {
+                RuleMark(x: .value("Day", traced.day))
+                    .foregroundStyle(.white.opacity(0.35)).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                PointMark(x: .value("Day", traced.day), y: .value("Spending", traced.amount))
+                    .foregroundStyle(Palette.lime).symbolSize(70)
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .gesture(
+                        // minimumDistance 0 so a tap reads a value too, not just a drag.
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard let plot = proxy.plotFrame else { return }
+                                let x = value.location.x - geometry[plot].origin.x
+                                guard let day: Int = proxy.value(atX: x) else { return }
+                                traced = Self.nearest(to: day, in: points)
+                            }
+                            .onEnded { _ in traced = nil }
+                    )
+            }
         }
         // Recessive by design: the line is the subject, the axes are there to be read when asked.
         .chartXAxis {
@@ -110,6 +134,19 @@ struct OverviewView: View {
                 }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
             }
         }
+    }
+
+    /// Snap to a day that actually has a reading rather than interpolating between two, so the
+    /// number under the finger is one that happened.
+    static func nearest(to day: Int, in points: [(day: Int, amount: Double)]) -> (day: Int, amount: Double)? {
+        points.min { abs($0.day - day) < abs($1.day - day) }
+    }
+
+    private var tracedCaption: String {
+        guard let traced, let date = Calendar.current.date(bySetting: .day, value: max(traced.day, 1), of: store.selectedMonth) else {
+            return "MONTHLY SPENDING"
+        }
+        return "BY \(date.formatted(.dateTime.month(.abbreviated).day()).uppercased())"
     }
 
     /// Axis ticks are for reading the shape, not the exact total — that is the number above the

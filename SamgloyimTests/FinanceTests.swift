@@ -410,6 +410,25 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(stored.institution, "American Express")
     }
 
+    func testTracingTheChartSnapsToADayThatHappened() {
+        let points: [(day: Int, amount: Double)] = [(0, 0), (1, 12.5), (2, 40), (5, 99.75)]
+        // A finger between two readings takes the closer one, never a value in between.
+        XCTAssertEqual(OverviewView.nearest(to: 1, in: points)?.amount, 12.5)
+        XCTAssertEqual(OverviewView.nearest(to: 3, in: points)?.day, 2)
+        XCTAssertEqual(OverviewView.nearest(to: 4, in: points)?.day, 5)
+        // Dragging past either end holds at the end rather than losing the readout.
+        XCTAssertEqual(OverviewView.nearest(to: -7, in: points)?.day, 0)
+        XCTAssertEqual(OverviewView.nearest(to: 99, in: points)?.day, 5)
+        XCTAssertNil(OverviewView.nearest(to: 3, in: []))
+    }
+
+    func testAxisTicksStayShortEnoughToRead() {
+        XCTAssertEqual(OverviewView.axisMoney(0), "$0")
+        XCTAssertEqual(OverviewView.axisMoney(450), "$450")
+        XCTAssertEqual(OverviewView.axisMoney(2500), "$2.5k")
+        XCTAssertEqual(OverviewView.axisMoney(12000), "$12k")
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
