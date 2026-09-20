@@ -10,6 +10,9 @@ name: iOS
 on:
   push:
     branches: [main]
+    # A version tag publishes a GitHub Release with the .ipa attached, rather than
+    # leaving it as an artifact that expires in 30 days.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -22,6 +25,9 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 30
+    permissions:
+      # Only the release step needs to write; everything else reads.
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -99,3 +105,28 @@ jobs:
           path: ${{ runner.temp }}/samgloyim.ipa
           retention-days: 30
           if-no-files-found: error
+
+      # Only on a version tag. The artifact above still exists either way, so an ordinary
+      # push is unaffected by anything here.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          IPA="$RUNNER_TEMP/samgloyim-$VERSION.ipa"
+          mv "$RUNNER_TEMP/samgloyim.ipa" "$IPA"
+          cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          Built by CI from this tag: unit tests, then an unsigned device archive.
+
+          **The .ipa is unsigned.** Signing needs an Apple Developer certificate and a
+          provisioning profile, neither of which can live in the repo, so it will not install
+          on a device as-is and it is not an App Store upload. It is good for inspecting the
+          build, keeping a demo archive, and re-signing locally with a tool such as Sideloadly.
+
+          Bank sync, card reward lookup and the receipt backend all talk to `http://localhost:5100`,
+          so they need `backend/` running on the same machine.
+          NOTES
+          gh release create "$VERSION" "$IPA" \
+            --title "$VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"
