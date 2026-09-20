@@ -16,6 +16,11 @@ services:
     startCommand: node server.js
     healthCheckPath: /health
     envVars:
+      # The key/value adapter uses global fetch, which needs Node 18 or newer. Pinned rather
+      # than inherited, because an older default would fail on the first sync rather than at
+      # deploy time, which is the worst moment to find out.
+      - key: NODE_VERSION
+        value: "22"
       - key: PLAID_CLIENT_ID
         sync: false
       - key: PLAID_SECRET
