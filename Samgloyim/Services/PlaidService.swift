@@ -19,7 +19,7 @@ struct PlaidTransactionPayload: Decodable {
         return Transaction(merchant: merchant, amount: amountCents, date: parsedDate, category: category, accountID: accountID,
             kind: kind == "income" ? .income : .expense, source: .plaid,
             note: pending ? "Pending at \(institution)" : institution, externalID: id,
-            isTransfer: SpendingCategory.isTransfer(primary: self.category, detailed: categoryDetailed))
+            isTransfer: SpendingCategory.isTransfer(primary: self.category, detailed: categoryDetailed, merchant: merchant))
     }
 }
 

@@ -181,6 +181,9 @@ final class FinanceTests: XCTestCase {
         // Zelle to a person is money spent, even though Plaid files it beside genuine transfers.
         XCTAssertFalse(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_TRANSFER_OUT_FROM_APPS"))
         XCTAssertFalse(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_OTHER_TRANSFER_OUT"))
+        // Amex Send is person-to-person however Plaid files it, so the outgoing side is spending.
+        XCTAssertFalse(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER", merchant: "Amex Send: Add Money"))
+        XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER", merchant: "External Withdrawal - HAPPEN BANK"))
         // Incoming stays out of income: a repayment, or the user's own money arriving, is not earnings.
         XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_IN", detailed: "TRANSFER_IN_TRANSFER_IN_FROM_APPS"))
         XCTAssertTrue(SpendingCategory.isTransfer(primary: "TRANSFER_IN", detailed: "TRANSFER_IN_OTHER_TRANSFER_IN"))

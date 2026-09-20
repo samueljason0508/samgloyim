@@ -93,6 +93,13 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// Issuers whose person-to-person service the bank reports as a move between the user's own
+    /// accounts. Amex Send is Venmo-style — the money leaves for someone else — whatever Plaid
+    /// labels it, so the merchant is the only thing that tells the truth here.
+    private static func sendsMoneyToPeople(_ merchant: String) -> Bool {
+        merchant.localizedCaseInsensitiveContains("amex send")
+    }
+
     /// Money moving between the user's own accounts, or paying off a card whose purchases are
     /// already recorded. Counting these as spending double-counts and, in the case of a large
     /// account transfer, swamps every real number on the screen.
@@ -102,11 +109,12 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
     /// only a move to the user's own account, savings, investments or cash is excluded. Incoming
     /// transfers stay excluded whatever their detail — a repayment or a deposit from the user's
     /// other bank is not earnings, and treating it as income would overstate what they made.
-    static func isTransfer(primary: String?, detailed: String?) -> Bool {
+    static func isTransfer(primary: String?, detailed: String?, merchant: String = "") -> Bool {
         if detailed == "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" { return true }
         guard let primary else { return false }
         if primary == "TRANSFER_IN" { return true }
         guard primary == "TRANSFER_OUT" else { return false }
+        if sendsMoneyToPeople(merchant) { return false }
         switch detailed {
         case "TRANSFER_OUT_ACCOUNT_TRANSFER", "TRANSFER_OUT_SAVINGS",
              "TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS", "TRANSFER_OUT_WITHDRAWAL":
