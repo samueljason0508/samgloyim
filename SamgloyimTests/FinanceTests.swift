@@ -84,6 +84,27 @@ final class FinanceTests: XCTestCase {
         XCTAssertNotNil(reading.date)
     }
 
+    func testAnItemLineCannotPassItselfOffAsTheReceiptDate() throws {
+        // "GROUND BEEF 80/20" reads as a date to NSDataDetector, and on a real receipt it sits well
+        // above the printed one — taking the first match put the scan eleven days off its purchase.
+        let reading = ReceiptScanner.parse(lines: [
+            "FOOD LION", "GROUND BEEF 80/20", "RUSSET POTATO 5LB", "SUBTOTAL", "TAX",
+            "TOTAL", "$55.00", "09/09/2026", "17:26"
+        ])
+        let date = try XCTUnwrap(reading.date)
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        XCTAssertEqual(parts.year, 2026)
+        XCTAssertEqual(parts.month, 9)
+        XCTAssertEqual(parts.day, 9)
+        XCTAssertEqual(reading.amount, 5500)
+    }
+
+    func testAReceiptIsNeverDatedInTheFuture() {
+        // A misread that lands ahead of today is always wrong; better no date than a wrong one.
+        let reading = ReceiptScanner.parse(lines: ["STORE", "SERIAL 12/31/2099", "TOTAL", "$4.00"])
+        XCTAssertNil(reading.date)
+    }
+
     func testReceiptWithoutTotalRequiresManualReview() {
         let reading = ReceiptScanner.parse(lines: ["COFFEE SHOP", "Latte 5.00", "SUBTOTAL 5.00", "TAX 0.50"])
         XCTAssertNil(reading.amount)

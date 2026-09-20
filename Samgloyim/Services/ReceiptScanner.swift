@@ -46,9 +46,27 @@ enum ReceiptScanner {
             else if index + 1 < lines.count, let amount = amounts(lines[index + 1]).last { candidates.append((1, amount)) }
         }
         let amount = candidates.sorted { $0.score == $1.score ? $0.amount > $1.amount : $0.score > $1.score }.first?.amount
-        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
         let text = lines.joined(separator: "\n")
-        let date = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap(\.date).first
-        return ReceiptReading(merchant: merchant, amount: amount, date: date, text: text)
+        return ReceiptReading(merchant: merchant, amount: amount, date: date(in: text), text: text)
+    }
+
+    /// The date the shop printed, not the first thing on the receipt that looks like one.
+    ///
+    /// A detector run over the whole receipt takes the earliest match, and an item line will happily
+    /// supply one — "GROUND BEEF 80/20" reads as a date, and it appears sixteen lines above the real
+    /// one. So a match that spells out a year wins, and a date in the future is discarded: a receipt
+    /// is always for something already bought.
+    static func date(in text: String) -> Date? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+        let nsText = text as NSString
+        let matches = detector?.matches(in: text, range: NSRange(location: 0, length: nsText.length)) ?? []
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let dated = matches.compactMap { match -> (date: Date, hasYear: Bool)? in
+            guard let date = match.date, date < tomorrow else { return nil }
+            let matched = nsText.substring(with: match.range)
+            let hasYear = matched.range(of: #"\d{4}"#, options: .regularExpression) != nil
+            return (date, hasYear)
+        }
+        return dated.first(where: \.hasYear)?.date ?? dated.first?.date
     }
 }
