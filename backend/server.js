@@ -90,9 +90,53 @@ function normalizeAccount(a, institutionName) {
   };
 }
 
+// --- Access control -----------------------------------------------------------
+// Every /api route reads or changes real bank data, so all of them require a shared token.
+// It is generated on first run and kept in data/, because a backend that is safe only while
+// nobody knows its address is not safe at all — and the moment this is reachable from a
+// tunnel or a host, the address is the only thing standing between a stranger and a full
+// transaction history.
+const ACCESS_TOKEN_PATH = path.join(DATA_DIR, 'access-token.txt');
+
+function loadAccessToken() {
+  const configured = (process.env.BACKEND_ACCESS_TOKEN || '').trim();
+  if (configured) return configured;
+  if (fs.existsSync(ACCESS_TOKEN_PATH)) {
+    const stored = fs.readFileSync(ACCESS_TOKEN_PATH, 'utf8').trim();
+    if (stored) return stored;
+  }
+  const minted = crypto.randomBytes(16).toString('hex');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(ACCESS_TOKEN_PATH, minted + '\n', { mode: 0o600 });
+  return minted;
+}
+
+const ACCESS_TOKEN = loadAccessToken();
+
+function presentedToken(req) {
+  const header = req.get('authorization') || '';
+  if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
+  return (req.get('x-samgloyim-token') || '').trim();
+}
+
+// Compared byte-for-byte in constant time: a comparison that bails on the first wrong
+// character leaks the token one character at a time to anyone patient enough to measure.
+function authorized(req) {
+  const given = Buffer.from(presentedToken(req), 'utf8');
+  const expected = Buffer.from(ACCESS_TOKEN, 'utf8');
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+app.use('/api', (req, res, next) => {
+  if (authorized(req)) return next();
+  res.status(401).json({
+    error: 'This backend needs its access token. Copy it from the terminal running `npm start` into the app under Import \u203a Sync server.',
+  });
+});
 
 // READ-ONLY BY DESIGN. Do not add 'auth', 'transfer', 'payment_initiation', 'processor',
 // or any other money-movement product to this array. This item is only ever enrolled in
@@ -288,7 +332,18 @@ app.post('/api/resync', (req, res) => {
   res.json({ items: items.length });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, env: PLAID_ENV }));
+// Left open so the app can tell "nothing is listening" apart from "wrong token", but it
+// says nothing about the setup unless the caller proves it belongs here.
+app.get('/health', (req, res) => {
+  if (!authorized(req)) return res.json({ ok: true });
+  res.json({ ok: true, env: PLAID_ENV, authorized: true });
+});
 
 const PORT = process.env.PORT || 5100;
-app.listen(PORT, () => console.log(`samgloyim backend listening on http://localhost:${PORT} (Plaid env: ${PLAID_ENV})`));
+app.listen(PORT, () => {
+  console.log(`samgloyim backend listening on http://localhost:${PORT} (Plaid env: ${PLAID_ENV})`);
+  console.log('');
+  console.log('  Access token:  ' + ACCESS_TOKEN);
+  console.log('  Paste it into the app under Import \u203a Sync server. Every /api route requires it.');
+  console.log('');
+});

@@ -572,6 +572,40 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(PlaidService.resolve("http://"), PlaidService.defaultBaseURL)
     }
 
+    func testTheAccessTokenIsCarriedOnEveryRequestAndKeptInTheKeychain() throws {
+        let original = BackendCredential.token
+        defer { BackendCredential.store(original ?? "") }
+
+        BackendCredential.store("")
+        XCTAssertNil(BackendCredential.token, "An empty token means no token, not an empty one")
+        XCTAssertNil(PlaidService.request("api/items").value(forHTTPHeaderField: "Authorization"),
+                     "With nothing stored there is no header to send")
+
+        XCTAssertTrue(BackendCredential.store("  cb676172b956d7fd  "))
+        XCTAssertEqual(BackendCredential.token, "cb676172b956d7fd", "Surrounding space is not part of a token")
+
+        // Every route, not just the ones someone remembered.
+        for path in ["api/items", "api/transactions", "api/card-rewards", "health"] {
+            XCTAssertEqual(PlaidService.request(path).value(forHTTPHeaderField: "Authorization"),
+                           "Bearer cb676172b956d7fd", "\(path) went out without the token")
+        }
+        XCTAssertEqual(PlaidService.request("api/items/abc", method: "DELETE").httpMethod, "DELETE")
+    }
+
+    func testARejectedTokenSaysSoRatherThanBlamingTheServer() {
+        let url = PlaidService.defaultBaseURL
+        func response(_ code: Int) -> HTTPURLResponse {
+            HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: nil)!
+        }
+        XCTAssertNoThrow(try PlaidService.validate(response(200)))
+        // The two failures need different fixes, so they must not share a message.
+        var refused = "", missing = ""
+        XCTAssertThrowsError(try PlaidService.validate(response(401))) { refused = ($0 as? ImportError)?.errorDescription ?? "" }
+        XCTAssertThrowsError(try PlaidService.validate(response(500))) { missing = ($0 as? ImportError)?.errorDescription ?? "" }
+        XCTAssertTrue(refused.contains("access token"), "A 401 should name the token: \(refused)")
+        XCTAssertFalse(missing.contains("access token"), "A 500 is not a token problem: \(missing)")
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))

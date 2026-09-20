@@ -93,20 +93,38 @@ enum PlaidService {
         return url
     }
 
-    /// Whether the backend answers, said in a sentence the user can act on when it does not.
+    /// Every request goes through here, so that no call site can forget to carry the token.
+    static func request(_ path: String, method: String = "GET") -> URLRequest {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        if let token = BackendCredential.token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    /// Whether the backend answers, and whether it accepts us, said in a sentence the user
+    /// can act on. Reachable-but-refused and not-there-at-all need different fixes.
     static func check() async -> String {
-        struct Health: Decodable { var ok: Bool; var env: String? }
-        var request = URLRequest(url: baseURL.appendingPathComponent("health"))
+        struct Health: Decodable { var ok: Bool; var env: String?; var authorized: Bool? }
+        var probe = request("health")
         // A short fuse on purpose: a wrong address should say so, not sit there for a minute.
-        request.timeoutInterval = 6
+        probe.timeoutInterval = 8
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: probe)
             try validate(response)
             let health = try JSONDecoder().decode(Health.self, from: data)
             guard health.ok else { return "Answered, but reported a problem." }
+            guard health.authorized == true else {
+                return BackendCredential.token == nil
+                    ? "Reachable, but no access token set. It is printed when the backend starts."
+                    : "Reachable, but it rejected this access token."
+            }
             return "Reachable — Plaid \(health.env ?? "?")"
+        } catch let error as ImportError {
+            return error.errorDescription ?? "Couldn’t reach it."
         } catch {
-            return "No answer from \(baseURL.absoluteString). Check the backend is running and that both devices share a network."
+            return "No answer from \(baseURL.absoluteString). Check the backend is running and reachable from this device."
         }
     }
     /// Plaid posts a bare calendar date with no time or zone. Reading it as UTC puts the
@@ -148,14 +166,13 @@ enum PlaidService {
     }
 
     static func fetchLinkedItems() async throws -> [PlaidLinkedItem] {
-        let (data, response) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/items"))
+        let (data, response) = try await URLSession.shared.data(for: request("api/items"))
         try validate(response)
         return try JSONDecoder().decode([PlaidLinkedItem].self, from: data)
     }
 
     static func disconnectItem(_ itemId: String) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/items/\(itemId)"))
-        request.httpMethod = "DELETE"
+        let request = request("api/items/\(itemId)", method: "DELETE")
         let (_, response) = try await URLSession.shared.data(for: request)
         try validate(response)
     }
@@ -163,15 +180,14 @@ enum PlaidService {
     /// A sync reports new rows, corrections to rows it sent before, and rows that never posted.
     /// Dropping the last two leaves pending purchases frozen at their raw card descriptor.
     static func fetchSync() async throws -> PlaidSync {
-        let (data, response) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/transactions"))
+        let (data, response) = try await URLSession.shared.data(for: request("api/transactions"))
         try validate(response)
         let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
         return PlaidSync(accounts: decoded.accounts, added: decoded.added, modified: decoded.modified, removed: decoded.removed)
     }
 
     static func post(_ path: String, body: [String: String]) async throws -> Data {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
+        var request = request(path, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -179,9 +195,19 @@ enum PlaidService {
         return data
     }
 
-    private static func validate(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ImportError.message("Couldn’t reach the local backend. Make sure it’s running: npm start in the backend/ folder.")
+    static func validate(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw ImportError.message("The backend gave an answer this app couldn’t read.")
+        }
+        // A rejected token and an absent server both look like "sync failed", and the fixes are
+        // nothing alike — so say which one it is.
+        if http.statusCode == 401 {
+            throw ImportError.message(BackendCredential.token == nil
+                ? "The backend needs its access token. It is printed when the backend starts; add it under Import › Sync server."
+                : "The backend rejected this access token. Check it under Import › Sync server.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ImportError.message("Couldn’t reach the backend. Make sure it’s running, and that the address under Import › Sync server is right.")
         }
     }
 }

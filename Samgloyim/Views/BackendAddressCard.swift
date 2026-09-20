@@ -8,12 +8,13 @@ import SwiftUI
 struct BackendAddressCard: View {
     @AppStorage(PlaidService.addressKey) private var address = ""
     @State private var editing = false
+    @State private var token = ""
     @State private var status: String?
     @State private var checking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button { withAnimation(.easeInOut(duration: 0.2)) { editing.toggle() } } label: {
+            Button { if editing { save() }; withAnimation(.easeInOut(duration: 0.2)) { editing.toggle() } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 11))
                     VStack(alignment: .leading, spacing: 3) {
@@ -35,12 +36,31 @@ struct BackendAddressCard: View {
                     .padding(.horizontal, 11).padding(.vertical, 9)
                     .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
                     .accessibilityIdentifier("backend-address-field")
+                // The token is not shown back: it is stored in the keychain, and a field that
+                // reprints a secret on screen has no reason to.
+                HStack(spacing: 8) {
+                    SecureField(BackendCredential.token == nil ? "Access token" : "Stored — type to replace", text: $token)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, 11).padding(.vertical, 9)
+                        .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityIdentifier("backend-token-field")
+                    if BackendCredential.token != nil {
+                        Image(systemName: "checkmark.shield.fill").font(.system(size: 13)).foregroundStyle(Palette.forest)
+                            .accessibilityLabel("A token is stored")
+                    }
+                }
                 HStack(spacing: 10) {
                     Button { Task { await check() } } label: {
                         Text(checking ? "Checking…" : "Check").font(.system(size: 11, weight: .semibold))
                     }.disabled(checking).accessibilityIdentifier("backend-check")
                     if !address.isEmpty {
                         Button("Use localhost") { address = ""; status = nil }.font(.system(size: 11))
+                    }
+                    if BackendCredential.token != nil {
+                        Button("Forget token") { BackendCredential.store(""); token = ""; status = nil }
+                            .font(.system(size: 11)).foregroundStyle(Palette.orange)
                     }
                 }
                 if let status {
@@ -54,8 +74,16 @@ struct BackendAddressCard: View {
     }
 
     private func check() async {
+        save()
         checking = true
         defer { checking = false }
         status = await PlaidService.check()
+    }
+
+    /// A token typed but never checked is still a token the user meant to set.
+    private func save() {
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        BackendCredential.store(token)
+        token = ""
     }
 }
