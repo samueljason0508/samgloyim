@@ -1,0 +1,101 @@
+name: iOS
+
+# Builds an installable-shaped .ipa on every push and leaves it as a downloadable artifact.
+#
+# The .ipa is UNSIGNED. Signing needs an Apple Developer certificate and a provisioning profile,
+# which cannot live in a public repo, so CI builds with code signing switched off. The result is
+# fine for inspecting, for archiving a demo build, and for re-signing locally with a tool like
+# Sideloadly — it will not install on a device as-is, and it is not an App Store upload.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push makes an older build pointless; don't queue runners behind it.
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # The .xcodeproj is generated, not committed, by a stdlib-only script.
+      - name: Generate the Xcode project
+        run: python3 scripts/generate_project.py
+
+      # Runner images change which simulators they ship, so ask rather than hard-code a device.
+      - name: Pick a simulator
+        id: sim
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          best = ""
+          for runtime, devices in runtimes.items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable") and device["name"].startswith("iPhone"):
+                      best = device["name"]
+                      break
+              if best:
+                  break
+          print(best)')
+          echo "Using ${DEVICE:-none}"
+          echo "device=$DEVICE" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests
+        run: |
+          xcodebuild test \
+            -project samgloyim.xcodeproj \
+            -scheme samgloyim \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.device }}" \
+            -only-testing:SamgloyimTests \
+            CODE_SIGNING_ALLOWED=NO
+
+      # UI tests are deliberately not run here: one needs a photo fixture loaded with
+      # `simctl addmedia` and another needs a simulated location, neither of which a clean runner
+      # has. They are run locally before release.
+
+      - name: Archive (unsigned, device)
+        run: |
+          xcodebuild archive \
+            -project samgloyim.xcodeproj \
+            -scheme samgloyim \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/samgloyim.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      # An .ipa is just the .app inside a folder called Payload, zipped. xcodebuild's own
+      # -exportArchive refuses without a signing identity, so package it directly.
+      - name: Package the .ipa
+        run: |
+          APP="$RUNNER_TEMP/samgloyim.xcarchive/Products/Applications/samgloyim.app"
+          test -d "$APP" || { echo "No .app in the archive"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry samgloyim.ipa Payload)
+          ls -lh "$RUNNER_TEMP/samgloyim.ipa"
+
+      - name: Upload the .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: samgloyim-unsigned-ipa-${{ github.run_number }}
+          path: ${{ runner.temp }}/samgloyim.ipa
+          retention-days: 30
+          if-no-files-found: error
