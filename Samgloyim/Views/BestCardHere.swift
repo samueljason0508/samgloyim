@@ -1,29 +1,36 @@
 import SwiftUI
 
-/// "You're at Chipotle — pay with Blue Cash Everyday." Appears only once there is a place to name
-/// and a card that beats the others; the rest of the time it stays out of the way.
+/// "Which card should I use here?" — finds the places around you, lets you say which one you're
+/// actually in, then names the card to pay with.
+///
+/// It suggests rather than decides. A row of shopfronts is metres apart and the category is what
+/// picks the card, so guessing the nearest match would quietly recommend the wrong card. Anywhere
+/// can also be searched for by name, which is the way out when the fix is poor or the place is new.
 struct BestCardHere: View {
     @EnvironmentObject var store: FinanceStore
 
     @State private var places: [NearbyPlace] = []
     @State private var chosen: NearbyPlace?
     @State private var looking = false
+    @State private var message: String?
+    @State private var query = ""
+    @State private var searching = false
     @State private var fetchingRates = false
     @State private var rateErrors: [String] = []
-    @State private var message: String?
 
-    private var place: NearbyPlace? { chosen ?? places.first }
-    private var ranked: [CardSuggestion] { place.map { store.cards(for: $0.category) } ?? [] }
+    private var ranked: [CardSuggestion] { chosen.map { store.cards(for: $0.category) } ?? [] }
     private var cards: [BankAccount] { store.data.accounts.filter { $0.isCreditCard == true } }
 
     var body: some View {
         Group {
-            if let place, let pick = CardAdvisor.headline(ranked) {
-                card(place, pick.best, runnerUp: pick.runnerUp)
-            } else if place != nil {
-                diagnosis
-            } else if looking || message != nil {
-                status
+            if let chosen {
+                if let pick = CardAdvisor.headline(ranked) {
+                    recommendation(chosen, pick.best, runnerUp: pick.runnerUp)
+                } else {
+                    diagnosis(chosen)
+                }
+            } else if looking || searching || !places.isEmpty || message != nil {
+                chooser
             } else {
                 Button { Task { await find() } } label: {
                     HStack(spacing: 9) {
@@ -37,13 +44,76 @@ struct BestCardHere: View {
         }
     }
 
-    private func card(_ place: NearbyPlace, _ best: CardSuggestion, runnerUp: CardSuggestion?) -> some View {
+    // MARK: - Choosing where you are
+
+    private var chooser: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("WHERE ARE YOU?").font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.2).foregroundStyle(Palette.muted)
+                Spacer()
+                if looking || searching { ProgressView().controlSize(.small) }
+                Button { reset() } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.muted) }
+                    .buttonStyle(.plain).accessibilityLabel("Close")
+            }
+
+            if let message {
+                Text(message).font(.system(size: 11)).foregroundStyle(Palette.orange).lineSpacing(3)
+            }
+
+            if places.isEmpty && !looking && !searching && message == nil {
+                Text("Nothing recognisable nearby. Try searching for it by name.")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(places.prefix(6)) { place in
+                    Button { chosen = place } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: place.category.symbol).font(.system(size: 11)).frame(width: 22)
+                                .foregroundStyle(Palette.forest)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(place.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(place.category.rawValue).font(.system(size: 9)).foregroundStyle(Palette.muted)
+                            }
+                            Spacer(minLength: 4)
+                            if let metres = place.metresAway {
+                                Text("\(metres)m").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+                            }
+                            Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(Palette.muted)
+                        }.padding(.vertical, 9).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                    if place.id != places.prefix(6).last?.id { Divider().overlay(Palette.line).padding(.leading, 32) }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                TextField("Set a location by name", text: $query)
+                    .font(.system(size: 12)).submitLabel(.search)
+                    .onSubmit { Task { await search() } }
+                    .accessibilityIdentifier("place-search")
+                if !query.isEmpty {
+                    Button("Search") { Task { await search() } }.font(.system(size: 11, weight: .semibold)).disabled(searching)
+                }
+            }.padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 11))
+
+            Button("Look around again") { Task { await find() } }
+                .font(.system(size: 11, weight: .semibold)).disabled(looking)
+        }.pocketCard(padding: 16)
+    }
+
+    // MARK: - The answer
+
+    private func recommendation(_ place: NearbyPlace, _ best: CardSuggestion, runnerUp: CardSuggestion?) -> some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 7) {
                 Image(systemName: "location.fill").font(.system(size: 9))
                 Text(place.name.uppercased()).font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.2).lineLimit(1)
                 Spacer()
-                Text("\(place.metresAway)m").font(.system(size: 9, design: .monospaced))
+                Button { chosen = nil } label: {
+                    Text("NOT HERE?").font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.1)
+                }.buttonStyle(.plain).accessibilityIdentifier("change-place")
             }.foregroundStyle(.white.opacity(0.7))
             VStack(alignment: .leading, spacing: 6) {
                 Text("Pay with \(best.account.name)").font(.system(size: 21, design: .serif)).foregroundStyle(.white)
@@ -65,38 +135,20 @@ struct BestCardHere: View {
         return "\(rate) back on \(place.category.rawValue.lowercased()) — \(runnerUp.account.name) gives \(theirs)."
     }
 
-    private var status: some View {
-        HStack(spacing: 9) {
-            if looking { ProgressView().controlSize(.small) } else { Image(systemName: "location.slash").font(.system(size: 12)) }
-            Text(looking ? "Looking around…" : (message ?? noCardMessage)).font(.system(size: 11)).foregroundStyle(Palette.muted)
-            Spacer()
-            if !looking {
-                Button("Try again") { Task { await find() } }.font(.system(size: 11, weight: .semibold))
-            }
-        }.pocketCard(padding: 14)
-    }
+    // MARK: - Why there is no answer
 
-    /// A place was found but no card can be recommended — almost always because no rates are set yet.
-    private var noCardMessage: String {
-        guard let place else { return "Nothing nearby." }
-        return store.data.accounts.contains { $0.isCreditCard == true }
-            ? "You're at \(place.name), but none of your cards has rates yet. Add them in Settings."
-            : "You're at \(place.name). Connect a card to compare rates."
-    }
-
-    /// Everything the recommendation is standing on, when it cannot make one. Which place, which
-    /// other places were nearby, which cards were considered, and what each one is missing — plus
-    /// the one button that fixes the usual cause.
-    private var diagnosis: some View {
+    /// Everything the recommendation stands on, when it cannot make one: which place, which cards
+    /// were considered, what each is missing — and the button that fixes the usual cause.
+    private func diagnosis(_ place: NearbyPlace) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let place {
-                HStack(spacing: 7) {
-                    Image(systemName: "location.fill").font(.system(size: 9))
-                    Text(place.name.uppercased()).font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.2).lineLimit(1)
-                    Spacer()
-                    Text("\(place.metresAway)m · \(place.category.rawValue)").font(.system(size: 9, design: .monospaced))
-                }.foregroundStyle(Palette.muted)
-            }
+            HStack(spacing: 7) {
+                Image(systemName: "location.fill").font(.system(size: 9))
+                Text(place.name.uppercased()).font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.2).lineLimit(1)
+                Spacer()
+                Button { chosen = nil } label: {
+                    Text("NOT HERE?").font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.1)
+                }.buttonStyle(.plain).accessibilityIdentifier("change-place")
+            }.foregroundStyle(Palette.muted)
 
             if cards.isEmpty {
                 Text("No credit cards connected. Only cards earn rewards, so there's nothing to compare yet.")
@@ -129,25 +181,33 @@ struct BestCardHere: View {
                 Text("Or enter them yourself in Settings › the card › Rewards.")
                     .font(.system(size: 10)).foregroundStyle(Palette.muted)
             }
-
-            if places.count > 1 {
-                Divider().overlay(Palette.line)
-                Text("SOMEWHERE ELSE?").font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1.1).foregroundStyle(Palette.muted)
-                // MapKit can pick the shop next door, and the category decides which card wins.
-                ForEach(places.prefix(4).filter { $0.id != place?.id }) { other in
-                    Button { chosen = other } label: {
-                        HStack(spacing: 8) {
-                            Text(other.name).font(.system(size: 11)).lineLimit(1)
-                            Spacer(minLength: 4)
-                            Text("\(other.metresAway)m · \(other.category.rawValue)").font(.system(size: 9, design: .monospaced)).foregroundStyle(Palette.muted)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                }
-            }
-
-            Button("Look around again") { Task { await find() } }
-                .font(.system(size: 11, weight: .semibold)).disabled(looking)
         }.pocketCard(padding: 16)
+    }
+
+    // MARK: - Work
+
+    private func find() async {
+        looking = true; message = nil; rateErrors = []; chosen = nil
+        defer { looking = false }
+        do {
+            places = try await PlaceFinder.nearbyPlaces()
+        } catch {
+            places = []
+            message = (error as? ImportError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func search() async {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        searching = true; message = nil
+        defer { searching = false }
+        do {
+            let found = try await PlaceFinder.search(text)
+            if found.isEmpty { message = "Nothing found for “\(text)”." } else { places = found }
+        } catch {
+            message = (error as? ImportError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     private func fetchRates() async {
@@ -159,14 +219,7 @@ struct BestCardHere: View {
         }
     }
 
-    private func find() async {
-        looking = true; message = nil; rateErrors = []; chosen = nil
-        defer { looking = false }
-        do {
-            places = try await PlaceFinder.nearbyPlaces()
-            if places.isEmpty { message = "Nothing recognisable nearby." }
-        } catch {
-            message = (error as? ImportError)?.errorDescription ?? error.localizedDescription
-        }
+    private func reset() {
+        places = []; chosen = nil; message = nil; query = ""; rateErrors = []
     }
 }

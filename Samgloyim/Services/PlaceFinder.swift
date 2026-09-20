@@ -6,7 +6,8 @@ struct NearbyPlace: Identifiable, Equatable {
     var id = UUID()
     var name: String
     var category: SpendingCategory
-    var metresAway: Int
+    /// Nil when the place was searched for by name rather than found underfoot.
+    var metresAway: Int?
 }
 
 /// Finds the shop you are standing in. There is no merchant database to build or host: MapKit
@@ -27,7 +28,27 @@ enum PlaceFinder {
             guard let name = item.name, let poi = item.pointOfInterestCategory,
                   let category = category(for: poi), let location = item.placemark.location else { return nil }
             return NearbyPlace(name: name, category: category, metresAway: Int(here.distance(from: location).rounded()))
-        }.sorted { $0.metresAway < $1.metresAway }
+        }.sorted { ($0.metresAway ?? .max) < ($1.metresAway ?? .max) }
+    }
+
+    /// Somewhere named rather than somewhere nearby — for when the right shop is not the closest
+    /// one, or there is no fix at all. Biased to the user's area when we know it.
+    static func search(_ query: String) async throws -> [NearbyPlace] {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        let here = try? await fix()
+        if let here {
+            request.region = MKCoordinateRegion(center: here.coordinate, latitudinalMeters: 30_000, longitudinalMeters: 30_000)
+        }
+        let response = try await MKLocalSearch(request: request).start()
+        return response.mapItems.compactMap { item in
+            guard let name = item.name else { return nil }
+            // A searched place may have no point-of-interest category; its name usually says enough.
+            let category = item.pointOfInterestCategory.flatMap(category(for:)) ?? SpendingCategory.infer(from: name)
+            let away = (here != nil && item.placemark.location != nil)
+                ? Int(here!.distance(from: item.placemark.location!).rounded()) : nil
+            return NearbyPlace(name: name, category: category, metresAway: away)
+        }
     }
 
     /// A first fix often fails while the radio is still warming up — indoors, or on a simulator with
