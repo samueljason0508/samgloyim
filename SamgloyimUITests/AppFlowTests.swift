@@ -176,6 +176,15 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Which card should I use here?"].exists)
     }
 
+    func testOverviewCategoriesOpenTheirBreakdown() {
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'overview-category-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let name = row.identifier.replacingOccurrences(of: "overview-category-", with: "")
+        tap(row)
+        // The drilldown for that category, with its second-level breakdown.
+        XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5))
+    }
+
     func testScreensAndCategoryDrilldown() {
         screenshot("Overview")
         tap(app.buttons["tab-Activity"])

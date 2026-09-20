@@ -198,12 +198,15 @@ struct OverviewView: View {
                     }.accessibilityLabel("Spending by category")
                     VStack(spacing: 12) {
                         ForEach(Array(store.categoryTotals.prefix(showAllCategories ? store.categoryTotals.count : 4)), id: \.category) { item in
-                            HStack(spacing: 6) {
-                                Circle().fill(item.category.color).frame(width: 6, height: 6)
-                                Text(item.category.rawValue).font(.system(size: 10)).lineLimit(1)
-                                Spacer(minLength: 3)
-                                Text("\(Int((Double(item.amount) / Double(max(store.spent, 1)) * 100).rounded()))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
-                            }
+                            NavigationLink { CategoryDetailView(category: item.category) } label: {
+                                HStack(spacing: 6) {
+                                    Circle().fill(item.category.color).frame(width: 6, height: 6)
+                                    Text(item.category.rawValue).font(.system(size: 10)).lineLimit(1)
+                                    Spacer(minLength: 3)
+                                    Text("\(Int((Double(item.amount) / Double(max(store.spent, 1)) * 100).rounded()))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                                    Image(systemName: "chevron.right").font(.system(size: 7, weight: .semibold)).foregroundStyle(Palette.muted)
+                                }.contentShape(Rectangle())
+                            }.buttonStyle(.plain).accessibilityIdentifier("overview-category-\(item.category.rawValue)")
                         }
                         if store.categoryTotals.count > 4 {
                             Button { withAnimation(.easeInOut(duration: 0.2)) { showAllCategories.toggle() } } label: {

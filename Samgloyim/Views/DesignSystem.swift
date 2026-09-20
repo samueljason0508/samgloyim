@@ -44,7 +44,7 @@ extension SpendingCategory {
         case .travel: Color(hex: 0x6FB3A8)
         case .personalCare: Color(hex: 0x8E3B5F)
         case .subscriptions: Color(hex: 0x4C4585)
-        case .people: Color(hex: 0xB4531F)
+        case .people: Color(hex: 0xC2568C)
         case .fees: Color(hex: 0x7A2E2E)
         case .government: Color(hex: 0xB9C4CC)
         case .services: Color(hex: 0x6B5B3E)
