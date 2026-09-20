@@ -1,0 +1,36 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+#
+# Every secret is marked `sync: false`, which means Render prompts for it and it is never
+# written into this repo.
+#
+# A free web service has no persistent disk and its filesystem is wiped on every spin-down,
+# so KV_REST_API_* must point at a key/value store — otherwise each quiet spell loses every
+# linked bank. The backend refuses to start on a half-configured setup rather than pretend.
+services:
+  - type: web
+    name: samgloyim-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_ENV
+        value: production
+      # 64 hex characters. Losing it makes every stored bank link unreadable.
+      - key: STORAGE_ENCRYPTION_KEY
+        sync: false
+      # What the app sends on every request. Change it here to revoke access.
+      - key: BACKEND_ACCESS_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: KV_REST_API_URL
+        sync: false
+      - key: KV_REST_API_TOKEN
+        sync: false

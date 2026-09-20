@@ -44,16 +44,51 @@ function decrypt(payload) {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
 }
-function loadItems() {
-  if (!fs.existsSync(STORE_PATH)) return [];
-  const raw = fs.readFileSync(STORE_PATH, 'utf8').trim();
+// --- Where things are kept ----------------------------------------------------
+// A file, locally. On a host with an ephemeral filesystem — Render's free tier wipes it on
+// every spin-down and every deploy — a file would mean re-linking every bank after each quiet
+// spell, so a key/value store takes over when one is configured. What gets written is the same
+// text either way: access tokens are encrypted before they leave this process, so the store
+// never holds one in the clear.
+const KV_URL = (process.env.KV_REST_API_URL || '').replace(/\/+$/, '');
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || '';
+const KV_ENABLED = Boolean(KV_URL && KV_TOKEN);
+
+async function readBlob(name, filePath) {
+  if (!KV_ENABLED) {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath, 'utf8').trim() || null;
+  }
+  const response = await fetch(`${KV_URL}/get/${encodeURIComponent(name)}`, {
+    headers: { Authorization: `Bearer ${KV_TOKEN}` },
+  });
+  if (!response.ok) throw new Error(`Key/value store answered ${response.status} reading ${name}`);
+  const body = await response.json();
+  return body.result || null;
+}
+
+async function writeBlob(name, filePath, text) {
+  if (!KV_ENABLED) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(filePath, text);
+    return;
+  }
+  const response = await fetch(`${KV_URL}/set/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${KV_TOKEN}` },
+    body: text,
+  });
+  if (!response.ok) throw new Error(`Key/value store answered ${response.status} writing ${name}`);
+}
+
+async function loadItems() {
+  const raw = await readBlob('items', STORE_PATH);
   if (!raw) return [];
   return JSON.parse(raw).map((item) => ({ ...item, accessToken: decrypt(item.accessToken) }));
 }
-function saveItems(items) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+async function saveItems(items) {
   const encoded = items.map((item) => ({ ...item, accessToken: encrypt(item.accessToken) }));
-  fs.writeFileSync(STORE_PATH, JSON.stringify(encoded, null, 2));
+  await writeBlob('items', STORE_PATH, JSON.stringify(encoded, null, 2));
 }
 
 // Plaid: positive amount = money out of the account (expense), negative = money in (income).
@@ -113,6 +148,17 @@ function loadAccessToken() {
 
 const ACCESS_TOKEN = loadAccessToken();
 
+// A minted token lives in data/, which a host with an ephemeral filesystem throws away — so
+// every restart would mint a different one and every app paired with it would start being
+// refused, for no visible reason. If this is configured for a host, the token must come from
+// the environment too.
+if (KV_ENABLED && !(process.env.BACKEND_ACCESS_TOKEN || '').trim()) {
+  console.error('BACKEND_ACCESS_TOKEN must be set when a key/value store is configured, or the');
+  console.error('token changes on every restart and the app stops being able to connect.');
+  console.error('Generate one with:  node -e "console.log(require(\'crypto\').randomBytes(16).toString(\'hex\'))"');
+  process.exit(1);
+}
+
 function presentedToken(req) {
   const header = req.get('authorization') || '';
   if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
@@ -166,7 +212,7 @@ app.post('/api/exchange_public_token', async (req, res) => {
   if (!public_token) return res.status(400).json({ error: 'public_token required' });
   try {
     const response = await client.itemPublicTokenExchange({ public_token });
-    const items = loadItems();
+    const items = await loadItems();
     items.push({
       itemId: response.data.item_id,
       accessToken: response.data.access_token,
@@ -174,7 +220,7 @@ app.post('/api/exchange_public_token', async (req, res) => {
       cursor: null,
       linkedAt: new Date().toISOString(),
     });
-    saveItems(items);
+    await saveItems(items);
     res.json({ item_id: response.data.item_id, institution_name: institution_name || 'Linked bank' });
   } catch (err) {
     console.error(err.response?.data || err.message);
@@ -182,12 +228,13 @@ app.post('/api/exchange_public_token', async (req, res) => {
   }
 });
 
-app.get('/api/items', (req, res) => {
-  res.json(loadItems().map(({ itemId, institutionName, linkedAt }) => ({ itemId, institutionName, linkedAt })));
+app.get('/api/items', async (req, res) => {
+  const items = await loadItems();
+  res.json(items.map(({ itemId, institutionName, linkedAt }) => ({ itemId, institutionName, linkedAt })));
 });
 
 app.delete('/api/items/:itemId', async (req, res) => {
-  const items = loadItems();
+  const items = await loadItems();
   const target = items.find((i) => i.itemId === req.params.itemId);
   if (!target) return res.status(404).json({ error: 'Not found' });
   try {
@@ -195,13 +242,13 @@ app.delete('/api/items/:itemId', async (req, res) => {
   } catch (err) {
     console.error(err.response?.data || err.message);
   }
-  saveItems(items.filter((i) => i.itemId !== req.params.itemId));
+  await saveItems(items.filter((i) => i.itemId !== req.params.itemId));
   res.json({ ok: true });
 });
 
 app.get('/api/transactions', async (req, res) => {
   try {
-    const items = loadItems();
+    const items = await loadItems();
     if (items.length === 0) return res.json({ accounts: [], added: [], modified: [], removed: [] });
 
     let added = [];
@@ -227,7 +274,7 @@ app.get('/api/transactions', async (req, res) => {
       updatedItems.push({ ...item, cursor });
     }
 
-    saveItems(updatedItems);
+    await saveItems(updatedItems);
     res.json({ accounts, added, modified, removed });
   } catch (err) {
     console.error(err.response?.data || err.message);
@@ -245,11 +292,12 @@ const REWARDS_TTL_DAYS = 14;
 const CATEGORIES = ['Food & drink', 'Groceries', 'Transport', 'Travel', 'Shopping', 'Education', 'Home & bills',
   'Entertainment', 'Subscriptions', 'Health', 'Personal care', 'People', 'Fees & interest', 'Government', 'Services', 'Other'];
 
-function loadRewards() {
-  if (!fs.existsSync(REWARDS_PATH)) return {};
+async function loadRewards() {
   try {
-    return JSON.parse(fs.readFileSync(REWARDS_PATH, 'utf8'));
+    const raw = await readBlob('rewards', REWARDS_PATH);
+    return raw ? JSON.parse(raw) : {};
   } catch {
+    // A cache that cannot be read is not worth failing a lookup over; look the rates up again.
     return {};
   }
 }
@@ -281,7 +329,7 @@ app.post('/api/card-rewards', async (req, res) => {
   const card = String(req.body?.card || '').trim();
   if (!card) return res.status(400).json({ error: 'A card name is required' });
 
-  const cache = loadRewards();
+  const cache = await loadRewards();
   const hit = cache[card.toLowerCase()];
   const freshUntil = hit && new Date(hit.fetchedAt).getTime() + REWARDS_TTL_DAYS * 86400000;
   if (hit && !req.query.refresh && freshUntil > Date.now()) return res.json({ ...hit, cached: true });
@@ -315,8 +363,7 @@ app.post('/api/card-rewards', async (req, res) => {
     const parsed = extractJSON(response.text);
     const entry = { card, fetchedAt: new Date().toISOString(), ...parsed };
     cache[card.toLowerCase()] = entry;
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(REWARDS_PATH, JSON.stringify(cache, null, 2));
+    await writeBlob('rewards', REWARDS_PATH, JSON.stringify(cache, null, 2));
     res.json({ ...entry, cached: false });
   } catch (err) {
     console.error(err.message);
@@ -326,9 +373,9 @@ app.post('/api/card-rewards', async (req, res) => {
 
 // Forgets every cursor so the next sync replays full history. Needed when the app learns to read
 // a field it used to ignore: a cursor reports each change once, so old rows are never re-sent.
-app.post('/api/resync', (req, res) => {
-  const items = loadItems().map((item) => ({ ...item, cursor: null }));
-  saveItems(items);
+app.post('/api/resync', async (req, res) => {
+  const items = (await loadItems()).map((item) => ({ ...item, cursor: null }));
+  await saveItems(items);
   res.json({ items: items.length });
 });
 

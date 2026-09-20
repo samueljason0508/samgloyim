@@ -97,6 +97,9 @@ enum PlaidService {
     static func request(_ path: String, method: String = "GET") -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
+        // A free host sleeps when idle and takes most of a minute to wake, so the first
+        // request after a quiet spell is slow rather than broken. Wait it out.
+        request.timeoutInterval = 90
         if let token = BackendCredential.token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -108,8 +111,9 @@ enum PlaidService {
     static func check() async -> String {
         struct Health: Decodable { var ok: Bool; var env: String?; var authorized: Bool? }
         var probe = request("health")
-        // A short fuse on purpose: a wrong address should say so, not sit there for a minute.
-        probe.timeoutInterval = 8
+        // Shorter than a real request: a wrong address should say so rather than sit there.
+        // Long enough that a sleeping free host usually gets a word in first.
+        probe.timeoutInterval = 25
         do {
             let (data, response) = try await URLSession.shared.data(for: probe)
             try validate(response)
@@ -124,7 +128,7 @@ enum PlaidService {
         } catch let error as ImportError {
             return error.errorDescription ?? "Couldn’t reach it."
         } catch {
-            return "No answer from \(baseURL.absoluteString). Check the backend is running and reachable from this device."
+            return "No answer from \(baseURL.absoluteString). Check it is running and reachable from this device — a free host that has been idle can take a minute to wake, so this is worth a second try."
         }
     }
     /// Plaid posts a bare calendar date with no time or zone. Reading it as UTC puts the

@@ -84,6 +84,49 @@ window does not count, and one that has just lapsed is called out rather than qu
 
 Only credit cards are ranked. A tie is left as a tie instead of picking a winner.
 
+## Running the backend somewhere other than your laptop
+
+The app asks the backend for bank sync, card rewards and nothing else; receipts are read on
+the device. **Import › Sync server** is where its address lives, along with the access token.
+On the simulator the default — `http://localhost:5100` — is right, because the app and the
+server share a machine. On a real phone `localhost` is the phone, so it has to be told where
+to look: either the machine's address on the same network (`10.0.0.5:5100`) or a public
+`https://` one.
+
+Every `/api` route requires an access token. The backend mints one on first run, keeps it at
+`backend/data/access-token.txt`, and prints it when it starts; paste that into the app. Set
+`BACKEND_ACCESS_TOKEN` to supply your own instead, and change it to revoke a device.
+
+### Deploying to Render
+
+`render.yaml` is a blueprint: point Render at this repo and it reads it. Two things to know
+before you do.
+
+A free web service **has no persistent disk** and its filesystem is erased on every deploy and
+every spin-down — which happens after 15 minutes without traffic. Linked banks are kept in
+that filesystem, so on a free plan they need somewhere else to live, and the backend sends
+them to a key/value store when `KV_REST_API_URL` and `KV_REST_API_TOKEN` are set. Any store
+speaking Upstash's REST shape works. Access tokens are encrypted before they leave the
+process, so the store never holds one in the clear.
+
+A free service also **sleeps**, and the first request after it wakes takes most of a minute.
+The app waits that out rather than reporting a failure, but the first sync after a quiet spell
+is slow, and the Check button may need a second press.
+
+    1. Create a key/value database and copy its REST URL and REST token.
+    2. Generate an access token:
+       node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"
+    3. New › Blueprint on Render, pick this repo, and fill in the values it asks for:
+       PLAID_CLIENT_ID, PLAID_SECRET, STORAGE_ENCRYPTION_KEY, BACKEND_ACCESS_TOKEN,
+       GEMINI_API_KEY, KV_REST_API_URL, KV_REST_API_TOKEN.
+    4. In the app, set Import › Sync server to the https address Render gives you, paste the
+       access token underneath, and press Check.
+
+Because the filesystem is wiped, `BACKEND_ACCESS_TOKEN` must be set on a hosted deployment:
+otherwise a new token is minted on every restart and every paired device starts being refused
+for no visible reason. The backend refuses to start in that state rather than let you find out
+later.
+
 ## Data and scope
 
 All amounts are integer cents in USD. Income is excluded from spending totals. Recorded account balances use all transactions and the opening balance, rather than a live bank balance. There are no budgets or savings goals; the app tracks what you spent, not what you planned to.
