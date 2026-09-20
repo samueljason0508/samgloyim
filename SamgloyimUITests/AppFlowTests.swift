@@ -170,6 +170,12 @@ final class AppFlowTests: XCTestCase {
         screenshot("Activity with time")
     }
 
+    func testOverviewOffersToPickACardForWhereYouAre() {
+        // Tapping it is what asks for location, so the test stops at the offer.
+        XCTAssertTrue(app.buttons["best-card-here"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Which card should I use here?"].exists)
+    }
+
     func testScreensAndCategoryDrilldown() {
         screenshot("Overview")
         tap(app.buttons["tab-Activity"])

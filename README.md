@@ -25,7 +25,8 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - Photograph a receipt and match it to a card purchase. The total must equal a purchase exactly; a near miss is never rounded onto the closest one. When nothing matches, several purchases tie, or the suggestion is wrong, you pick the purchase yourself — or save the receipt as a new one.
 - CSV import with review, row-level validation, inferred categories, and possible duplicate detection. Invalid rows are listed; they are never silently imported.
 - CSV export through the system Files picker.
-- Calculated monthly insights and short financial-literacy lessons.
+- Calculated monthly insights.
+- **Which card should I use here?** On Overview, one tap finds the shop you are standing in and names the card that earns the most there. MapKit identifies the place, so there is no merchant database to build; earn rates are looked up per card and are editable, because a rotating category changes every quarter and a rate that has run out is worse than no rate.
 - Atomic JSON persistence in the app's Application Support directory. Corrupt or newer-format saves are preserved rather than overwritten.
 
 ## Try imports
@@ -67,13 +68,27 @@ Attaching keeps the confirmed merchant, total, date, and extracted text next to 
 xcrun simctl addmedia booted Samples/receipt_trader_joes.png
 ```
 
+## Which card should I use here?
+
+**Overview → Which card should I use here?** asks for your location once, on that tap, finds the nearest place through MapKit, and
+ranks your cards for what that place sells. Location is used while the app is open, never leaves the device, and is never sent to the
+backend.
+
+Earn rates are not hard-coded to any particular card. `POST /api/card-rewards` looks up whatever card your bank reported — Plaid's
+`official_name`, e.g. "Blue Cash Everyday®" — from what the issuer publishes, and caches the answer for two weeks. That needs
+`ANTHROPIC_API_KEY` in `backend/.env`; without it the lookup returns a clear error and you enter rates by hand in Settings → the
+account → Rewards. Either way the rates are yours to correct, and every one carries the window it applies to: a rate outside its
+window does not count, and one that has just lapsed is called out rather than quietly dropped.
+
+Only credit cards are ranked. A tie is left as a tie instead of picking a winner.
+
 ## Data and scope
 
 All amounts are integer cents in USD. Income is excluded from spending totals. Recorded account balances use all transactions and the opening balance, rather than a live bank balance. There are no budgets or savings goals; the app tracks what you spent, not what you planned to.
 
 Receipt images are processed with Apple's on-device Vision text recognition; the app keeps reviewed fields and extracted text, not the original image.
 
-Bank sync goes through Plaid and requires the local backend in `backend/` and your own Plaid credentials; connections are read-only and scoped to transactions. This version does **not** connect to Apple Wallet, Google Sheets accounts, or Excel accounts; it does not read `.xlsx` directly. Location-based merchant discounts are not implemented because they require a real offer database and location service. Insights are deterministic calculations; lessons are written content, not an AI chat service. There is no fraud detection or App Store deployment in this project.
+Bank sync goes through Plaid and requires the local backend in `backend/` and your own Plaid credentials; connections are read-only and scoped to transactions. This version does **not** connect to Apple Wallet, Google Sheets accounts, or Excel accounts; it does not read `.xlsx` directly. Card recommendations compare published earn rates; they are not an offers feed. No API exposes Amex Offers or similar, so nothing here claims a discount is available — only what a card earns by category, with the date that rate was looked up. Insights are deterministic calculations. There is no fraud detection or App Store deployment in this project.
 
 A bank first reports a purchase while it is pending, under a raw card descriptor and with no category, then re-reports it enriched once it posts. A cursor sends each of those changes exactly once, so a sync that reads only new rows leaves the first version frozen forever — which is how nearly everything ends up filed under Other. `POST /api/resync` forgets every cursor and replays full history; rows already stored are repaired in place rather than duplicated.
 

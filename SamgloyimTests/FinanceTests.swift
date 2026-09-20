@@ -315,6 +315,101 @@ final class FinanceTests: XCTestCase {
         XCTAssertFalse(data.accounts.contains { $0.name == "Cash" }, "An account kept by hand already serves that purpose")
     }
 
+    private func card(_ name: String, _ rates: [RewardRate]) -> BankAccount {
+        BankAccount(name: name, detail: "Synced", isCreditCard: true, rewards: rates, institution: name)
+    }
+
+    func testTheBestCardIsTheOneEarningMostInThatCategoryToday() throws {
+        let july = try XCTUnwrap(CSVService.parseDate("2026-07-01"))
+        let september = try XCTUnwrap(CSVService.parseDate("2026-09-30"))
+        let october = try XCTUnwrap(CSVService.parseDate("2026-10-01"))
+        let december = try XCTUnwrap(CSVService.parseDate("2026-12-31"))
+        let rotating = card("Rotating", [
+            RewardRate(category: .transport, basisPoints: 500, startsOn: july, endsOn: september, capCents: 150_000, needsActivation: true),
+            RewardRate(category: .food, basisPoints: 500, startsOn: october, endsOn: december, capCents: 150_000, needsActivation: true),
+            RewardRate(category: nil, basisPoints: 100)
+        ])
+        let everyday = card("Everyday", [
+            RewardRate(category: .groceries, basisPoints: 300, capCents: 600_000),
+            RewardRate(category: nil, basisPoints: 100)
+        ])
+        let wallet = [rotating, everyday]
+
+        // In September the rotating card is on transport, so it wins at a gas station.
+        let gas = CardAdvisor.rank(wallet, for: .transport, now: september)
+        XCTAssertEqual(gas.first?.account.name, "Rotating")
+        XCTAssertEqual(gas.first?.basisPoints, 500)
+        XCTAssertTrue(gas.first?.caveats.contains { $0.contains("activating") } == true)
+        XCTAssertTrue(gas.first?.caveats.contains { $0.contains("$1,500") } == true)
+
+        // A restaurant in September is a tie on the base rate: the quarter has not turned over yet.
+        let dinnerNow = CardAdvisor.rank(wallet, for: .food, now: september)
+        XCTAssertEqual(dinnerNow.map(\.basisPoints), [100, 100])
+        XCTAssertNil(CardAdvisor.headline(dinnerNow)?.runnerUp, "Nothing beats anything, so there is no runner-up to name")
+        XCTAssertTrue(dinnerNow.first { $0.account.name == "Rotating" }?.caveats.contains { $0.contains("from Oct") } == true)
+
+        // The same restaurant in October is 5%.
+        XCTAssertEqual(CardAdvisor.rank(wallet, for: .food, now: october).first?.basisPoints, 500)
+        // Groceries never rotate, so the everyday card wins whatever the month.
+        XCTAssertEqual(CardAdvisor.rank(wallet, for: .groceries, now: october).first?.account.name, "Everyday")
+    }
+
+    func testARateThatHasRunOutIsSaidOutLoudRatherThanQuietlyDropped() throws {
+        let july = try XCTUnwrap(CSVService.parseDate("2026-07-01"))
+        let september = try XCTUnwrap(CSVService.parseDate("2026-09-30"))
+        let october = try XCTUnwrap(CSVService.parseDate("2026-10-05"))
+        let rotating = card("Rotating", [
+            RewardRate(category: .transport, basisPoints: 500, startsOn: july, endsOn: september),
+            RewardRate(category: nil, basisPoints: 100)
+        ])
+        let ranked = CardAdvisor.rank([rotating], for: .transport, now: october)
+        XCTAssertEqual(ranked.first?.basisPoints, 100, "An expired rate does not apply")
+        // The card was the right answer last week; saying nothing would leave the user believing it.
+        XCTAssertTrue(ranked.first?.caveats.contains { $0.contains("ended") } == true)
+    }
+
+    func testOnlyCardsAreRankedAndOnlyWhenSomethingBeatsSomething() throws {
+        var debit = BankAccount(name: "Chime", detail: "Synced", institution: "Chime")
+        debit.isCreditCard = false
+        debit.rewards = [RewardRate(category: nil, basisPoints: 900)]
+        let cash = FinanceData.cashAccount()
+        let plain = card("Plain", [RewardRate(category: nil, basisPoints: 100)])
+
+        let ranked = CardAdvisor.rank([debit, cash, plain], for: .food)
+        XCTAssertEqual(ranked.map(\.account.name), ["Plain"], "A debit account earns nothing to compare")
+        XCTAssertNotNil(CardAdvisor.headline(ranked))
+        // A card with no rates at all is not a recommendation.
+        XCTAssertNil(CardAdvisor.headline(CardAdvisor.rank([card("Unknown", [])], for: .food)))
+    }
+
+    func testNearbyPlacesMapOntoCategoriesTheAppCanSpendIn() {
+        XCTAssertEqual(PlaceFinder.category(for: .restaurant), .food)
+        XCTAssertEqual(PlaceFinder.category(for: .cafe), .food)
+        XCTAssertEqual(PlaceFinder.category(for: .foodMarket), .groceries)
+        XCTAssertEqual(PlaceFinder.category(for: .gasStation), .transport)
+        XCTAssertEqual(PlaceFinder.category(for: .pharmacy), .health)
+        XCTAssertEqual(PlaceFinder.category(for: .store), .shopping)
+        // Somewhere you cannot pay for anything is not a place to recommend a card for.
+        XCTAssertNil(PlaceFinder.category(for: .park))
+        XCTAssertNil(PlaceFinder.category(for: .fireStation))
+    }
+
+    @MainActor func testRatesSurviveEditingTheAccountTheyBelongTo() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        var amex = BankAccount(name: "American Express", detail: "Synced", institution: "American Express")
+        amex.isCreditCard = true
+        XCTAssertTrue(store.saveAccount(amex))
+        XCTAssertTrue(store.setRewards([RewardRate(category: .groceries, basisPoints: 300)], for: amex.id))
+
+        let reloaded = FinanceStore(fileURL: url, demo: false)
+        let stored = try XCTUnwrap(reloaded.account(amex.id))
+        XCTAssertEqual(stored.rewards?.first?.basisPoints, 300)
+        XCTAssertEqual(stored.rewards?.first?.percentText, "3%")
+        XCTAssertEqual(stored.institution, "American Express")
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))

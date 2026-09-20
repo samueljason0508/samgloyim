@@ -8,6 +8,7 @@ struct OverviewView: View {
     var settings: () -> Void
     var showActivity: () -> Void
     @State private var selectedTransaction: Transaction?
+    @State private var prefilled: Transaction?
 
     var body: some View {
         ScrollView {
@@ -23,6 +24,8 @@ struct OverviewView: View {
                 }
                 VStack(spacing: 12) { MonthSelector(); AccountFilter() }
                 spendingCard
+                // Location is only ever asked for on a tap, so this is safe to show everywhere.
+                BestCardHere { place in prefilled = Transaction(merchant: place.name, amount: 0, date: Date(), category: place.category, accountID: store.cashAccountID ?? UUID()) }
                 quickActions
                 if store.data.isDemo {
                     Button(action: settings) {
@@ -53,6 +56,7 @@ struct OverviewView: View {
             }.padding(.horizontal, 22).padding(.bottom, 22)
         }.pageBackground().toolbar(.hidden, for: .navigationBar)
             .sheet(item: $selectedTransaction) { TransactionEditor(transaction: $0) }
+            .sheet(item: $prefilled) { TransactionEditor(transaction: $0) }
     }
 
     private var masthead: some View {

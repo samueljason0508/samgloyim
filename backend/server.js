@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { Configuration, PlaidApi, PlaidEnvironments } = require('plaid');
+const Anthropic = require('@anthropic-ai/sdk');
 
 const PLAID_ENV = process.env.PLAID_ENV || 'sandbox';
 const KEY = Buffer.from(process.env.STORAGE_ENCRYPTION_KEY || '', 'hex');
@@ -72,6 +73,20 @@ function normalize(t, institutionName) {
     categoryDetailed: t.personal_finance_category?.detailed || null,
     institution: institutionName,
     pending: t.pending,
+  };
+}
+
+// A credit card's official_name ("American Express® Gold Card") is what identifies the product,
+// and so what its earn rates can be looked up against. transactionsSync already returns it.
+function normalizeAccount(a, institutionName) {
+  return {
+    accountId: a.account_id,
+    name: a.name,
+    officialName: a.official_name || null,
+    mask: a.mask || null,
+    subtype: a.subtype || null,
+    isCreditCard: a.type === 'credit',
+    institution: institutionName,
   };
 }
 
@@ -143,11 +158,12 @@ app.delete('/api/items/:itemId', async (req, res) => {
 app.get('/api/transactions', async (req, res) => {
   try {
     const items = loadItems();
-    if (items.length === 0) return res.json({ added: [], modified: [], removed: [] });
+    if (items.length === 0) return res.json({ accounts: [], added: [], modified: [], removed: [] });
 
     let added = [];
     let modified = [];
     let removed = [];
+    let accounts = [];
     const updatedItems = [];
 
     for (const item of items) {
@@ -155,6 +171,9 @@ app.get('/api/transactions', async (req, res) => {
       let hasMore = true;
       while (hasMore) {
         const resp = await client.transactionsSync({ access_token: item.accessToken, cursor });
+        for (const account of resp.data.accounts.map((a) => normalizeAccount(a, item.institutionName))) {
+          if (!accounts.some((existing) => existing.accountId === account.accountId)) accounts.push(account);
+        }
         added = added.concat(resp.data.added.map((t) => normalize(t, item.institutionName)));
         modified = modified.concat(resp.data.modified.map((t) => normalize(t, item.institutionName)));
         removed = removed.concat(resp.data.removed.map((t) => t.transaction_id));
@@ -165,10 +184,86 @@ app.get('/api/transactions', async (req, res) => {
     }
 
     saveItems(updatedItems);
-    res.json({ added, modified, removed });
+    res.json({ accounts, added, modified, removed });
   } catch (err) {
     console.error(err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to sync transactions' });
+  }
+});
+
+// --- Card reward rates ---------------------------------------------------
+// Nothing publishes earn rates as an API, but every issuer publishes them on the open web, and
+// Discover-style rotating categories change every quarter. So the rates are looked up live for
+// whatever card the bank reports, rather than baked into the app for a fixed list of products.
+// Answers are cached on disk: a card's rates are worth re-checking occasionally, not every launch.
+const REWARDS_PATH = path.join(DATA_DIR, 'rewards.json');
+const REWARDS_TTL_DAYS = 14;
+const CATEGORIES = ['Food & drink', 'Groceries', 'Transport', 'Shopping', 'Education', 'Home & bills', 'Entertainment', 'Health', 'Other'];
+
+function loadRewards() {
+  if (!fs.existsSync(REWARDS_PATH)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(REWARDS_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function extractJSON(message) {
+  const texts = message.content.filter((b) => b.type === 'text').map((b) => b.text);
+  const raw = texts.join('\n');
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end === -1) throw new Error('No JSON object in the reply');
+  return JSON.parse(raw.slice(start, end + 1));
+}
+
+app.post('/api/card-rewards', async (req, res) => {
+  const card = String(req.body?.card || '').trim();
+  if (!card) return res.status(400).json({ error: 'A card name is required' });
+
+  const cache = loadRewards();
+  const hit = cache[card.toLowerCase()];
+  const freshUntil = hit && new Date(hit.fetchedAt).getTime() + REWARDS_TTL_DAYS * 86400000;
+  if (hit && !req.query.refresh && freshUntil > Date.now()) return res.json({ ...hit, cached: true });
+
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+    return res.status(503).json({ error: 'Rewards lookup is not configured. Set ANTHROPIC_API_KEY in backend/.env, or enter the rates by hand.' });
+  }
+
+  try {
+    const client = new Anthropic();
+    const today = new Date().toISOString().slice(0, 10);
+    const message = await client.messages.create({
+      model: 'claude-opus-5',
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 6 }],
+      system: `You look up published credit card earn rates. Today is ${today}.
+Search the issuer's own page first, then a reputable card-review site to confirm.
+Report only what you find. Never invent a rate, and omit any category you cannot confirm.
+A rotating category (Discover-style) must carry the exact quarter it applies to; a rate with no
+end date is the card's standing offer. Caps are per the period the issuer states.
+Reply with one JSON object and nothing else:
+{"card": string, "issuer": string, "rates": [{"category": one of ${JSON.stringify(CATEGORIES)} or null for the catch-all rate,
+"percent": number, "startsOn": "YYYY-MM-DD" or null, "endsOn": "YYYY-MM-DD" or null,
+"capCents": integer or null, "needsActivation": boolean, "note": short string}], "sources": [url]}
+Map each published category onto the closest one in that list: supermarkets to Groceries,
+restaurants and dining to Food & drink, gas and transit and flights to Transport, online retail and
+department stores to Shopping, utilities and streaming bills to Home & bills, and so on. Points are
+counted at one cent each.`,
+      messages: [{ role: 'user', content: `What does the "${card}" card earn, by category, right now?` }],
+    });
+
+    const parsed = extractJSON(message);
+    const entry = { card, fetchedAt: new Date().toISOString(), ...parsed };
+    cache[card.toLowerCase()] = entry;
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(REWARDS_PATH, JSON.stringify(cache, null, 2));
+    res.json({ ...entry, cached: false });
+  } catch (err) {
+    console.error(err.message);
+    res.status(502).json({ error: 'Could not look up rates for that card. Enter them by hand, or try again.' });
   }
 });
 

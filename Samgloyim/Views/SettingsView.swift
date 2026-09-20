@@ -74,7 +74,7 @@ struct SettingsView: View {
                     feature("On-device receipt reading", detail: "Choose receipt images from Photos or Files, then check the extracted merchant, total, date, and category.")
                     feature("Read-only bank sync", detail: "Connect a bank via Plaid to sync transactions automatically. This app can only read transaction data — it can never move money, and you can disconnect a bank anytime above.")
                     feature("Accounts you control", detail: "Add transactions manually or import them. Apple Wallet isn’t connected in this version.")
-                    feature("Clear spending insights", detail: "Charts and monthly notes use your recorded data. Lessons are written educational content; there’s no AI chatbot or live deal service.")
+                    feature("Clear spending insights", detail: "Charts and monthly notes use your recorded data. Card reward rates are looked up from what issuers publish, and you can correct any of them.")
                 }
                 Section { Text("Your data is saved locally on this device. This app has no backend, analytics, or sign-in. It uses USD for all amounts. Export your transactions before deleting the app.").font(.footnote).foregroundStyle(Palette.muted) }
             }.scrollContentBackground(.hidden).pageBackground().navigationTitle("Make it yours").navigationBarTitleDisplayMode(.inline)
@@ -115,6 +115,9 @@ struct AccountEditor: View {
     @State private var detail = "Checking"
     @State private var opening = "0.00"
     @State private var symbol = "building.columns.fill"
+    @State private var rewards: [RewardRate] = []
+    @State private var lookingUp = false
+    @State private var lookupError: String?
     private var nameAvailable: Bool { !store.data.accounts.contains { $0.id != account?.id && $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame } }
     private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Money.parse(opening) != nil && nameAvailable }
     var body: some View {
@@ -132,16 +135,80 @@ struct AccountEditor: View {
                 Section {
                     HStack { Text("$"); TextField("Opening balance", text: $opening).keyboardType(.numbersAndPunctuation).accessibilityIdentifier("account-balance") }
                 } header: { Text("Opening balance") } footer: { Text("Enter the balance before your earliest recorded transaction. Tracked balances then add income and subtract expenses. A negative opening balance is allowed.") }
+                if account?.isCreditCard == true || !rewards.isEmpty { rewardsSection }
                 if !nameAvailable { Text("Choose a unique account name so CSV imports can match it correctly.").foregroundStyle(Palette.orange) }
             }.scrollContentBackground(.hidden).pageBackground().navigationTitle(account == nil ? "Add an account" : "Edit account").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("Save") {
                         guard let cents = Money.parse(opening) else { return }
-                        if store.saveAccount(BankAccount(id: account?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), detail: detail, symbol: symbol, openingBalance: cents, colorIndex: account?.colorIndex ?? store.data.accounts.count % 3)) { dismiss() }
+                        // Edit what the user owns and leave the rest alone: rebuilding the account
+                        // here would drop the institution it is matched to, and its rates with it.
+                        var updated = account ?? BankAccount(name: "", detail: "", colorIndex: store.data.accounts.count % 3)
+                        updated.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        updated.detail = detail
+                        updated.symbol = symbol
+                        updated.openingBalance = cents
+                        updated.rewards = rewards.isEmpty ? nil : rewards
+                        if store.saveAccount(updated) { dismiss() }
                     }.disabled(!valid).accessibilityIdentifier("save-account") }
                 }
-                .onAppear { if let account { name = account.name; detail = account.detail; opening = Money.input(account.openingBalance); symbol = account.symbol } }
+                .onAppear { if let account { name = account.name; detail = account.detail; opening = Money.input(account.openingBalance); symbol = account.symbol; rewards = account.rewards ?? [] } }
+        }
+    }
+
+    /// What this card earns. Looked up for whatever card the bank reported, and editable after —
+    /// published rates change, and the user is the one who knows which ones they actually have.
+    private var rewardsSection: some View {
+        Section {
+            ForEach($rewards) { $rate in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Picker("", selection: $rate.category) {
+                            Text("Everything else").tag(SpendingCategory?.none)
+                            ForEach(SpendingCategory.allCases) { Text($0.rawValue).tag(SpendingCategory?.some($0)) }
+                        }.labelsHidden()
+                        Spacer()
+                        TextField("0", value: Binding(get: { Double(rate.basisPoints) / 100 },
+                                                      set: { rate.basisPoints = Int(($0 * 100).rounded()) }),
+                                  format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 52)
+                        Text("%").foregroundStyle(Palette.muted)
+                    }
+                    if let window = windowText(rate) {
+                        Text(window).font(.system(size: 10)).foregroundStyle(rate.applies(on: Date()) ? Palette.muted : Palette.orange)
+                    }
+                    if !rate.note.isEmpty { Text(rate.note).font(.system(size: 10)).foregroundStyle(Palette.muted) }
+                }
+            }.onDelete { rewards.remove(atOffsets: $0) }
+            Button("Add a rate") { rewards.append(RewardRate(category: nil, basisPoints: 100)) }
+            Button(lookingUp ? "Looking it up…" : "Look up published rates") {
+                Task { await lookUp() }
+            }.disabled(lookingUp).accessibilityIdentifier("lookup-rewards")
+        } header: {
+            Text(account?.officialName.map { "Rewards · \($0)" } ?? "Rewards")
+        } footer: {
+            Text(lookupError ?? "Rates are looked up from what the issuer publishes and can go out of date — a rotating category changes every quarter. Correct anything that's wrong; what you type here is what the app uses.")
+                .foregroundStyle(lookupError == nil ? Palette.muted : Palette.orange)
+        }
+    }
+
+    private func windowText(_ rate: RewardRate) -> String? {
+        guard rate.startsOn != nil || rate.endsOn != nil else { return nil }
+        let format = Date.FormatStyle.dateTime.month(.abbreviated).day().year()
+        let from = rate.startsOn.map { $0.formatted(format) } ?? "now"
+        let until = rate.endsOn.map { $0.formatted(format) } ?? "further notice"
+        return rate.applies(on: Date()) ? "\(from) – \(until)" : "Not active · \(from) – \(until)"
+    }
+
+    private func lookUp() async {
+        guard let account else { return }
+        lookingUp = true; lookupError = nil
+        defer { lookingUp = false }
+        do {
+            try await store.lookUpRewards(for: account)
+            rewards = store.account(account.id)?.rewards ?? []
+        } catch {
+            lookupError = (error as? ImportError)?.errorDescription ?? error.localizedDescription
         }
     }
 }

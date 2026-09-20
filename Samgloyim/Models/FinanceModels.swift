@@ -135,6 +135,30 @@ enum TransactionKind: String, Codable, CaseIterable, Identifiable {
 
 enum TransactionSource: String, Codable { case manual = "Manual", receipt = "Receipt", csv = "Spreadsheet", sample = "Sample", plaid = "Bank" }
 
+/// What one card pays back in one category, for as long as it pays it. A rate without a window is
+/// the card's standing offer; a rate with one is a promotion that will stop being true.
+struct RewardRate: Codable, Equatable, Identifiable {
+    var id = UUID()
+    /// Nil means everything the other rates do not cover.
+    var category: SpendingCategory?
+    /// 300 is 3% or 3x. Points are counted at a cent each until the user says otherwise.
+    var basisPoints: Int
+    var startsOn: Date?
+    var endsOn: Date?
+    var capCents: Int?
+    var needsActivation: Bool = false
+    var note: String = ""
+
+    func applies(on date: Date) -> Bool {
+        if let startsOn, date < startsOn { return false }
+        if let endsOn, date > endsOn { return false }
+        return true
+    }
+    var percentText: String {
+        basisPoints % 100 == 0 ? "\(basisPoints / 100)%" : String(format: "%.1f%%", Double(basisPoints) / 100)
+    }
+}
+
 struct BankAccount: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
@@ -142,6 +166,14 @@ struct BankAccount: Identifiable, Codable, Equatable {
     var symbol: String = "building.columns.fill"
     var openingBalance: Int = 0
     var colorIndex: Int = 0
+    /// The card product as the issuer names it — "Blue Cash Everyday®" — which is what its earn
+    /// rates can be looked up against. The bank reports it; `name` stays whatever the user calls it.
+    var officialName: String?
+    var mask: String?
+    var isCreditCard: Bool?
+    /// Optional, not a defaulted array: a non-optional property fails to decode from a save written
+    /// before it existed, however sensible its default looks.
+    var rewards: [RewardRate]?
     /// The bank this account mirrors. Nil means it is kept by hand — cash, or anything not synced.
     /// A sync files each institution into its own account, so this is how one is found again.
     var institution: String?

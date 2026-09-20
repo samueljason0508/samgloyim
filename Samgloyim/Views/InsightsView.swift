@@ -5,12 +5,11 @@ enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "Account" }
 
 struct InsightsView: View {
     @EnvironmentObject var store: FinanceStore
-    @State private var lesson: Lesson?
     @State private var flowMode = FlowMode.flow
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 23) {
-                PageHeader(eyebrow: "LESS GUESSING, MORE UNDERSTANDING", title: "The bigger picture.", symbol: "book.closed", accessibility: "Learn about budgeting") { lesson = Lesson.library[0] }
+                PageHeader(eyebrow: "LESS GUESSING, MORE UNDERSTANDING", title: "The bigger picture.", symbol: "chart.pie", accessibility: "Spending by category") { }
                 MonthSelector()
                 AccountFilter()
                 VStack(alignment: .leading, spacing: 13) {
@@ -60,24 +59,8 @@ struct InsightsView: View {
                     }
                     if store.categoryTotals.isEmpty { Text("No spending recorded for this month.").font(.subheadline).foregroundStyle(Palette.muted) }
                 }.pocketCard(padding: 18)
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionHeading(title: "Money, made simpler", detail: "Small lessons")
-                    ForEach(Lesson.library) { item in
-                        Button { lesson = item } label: {
-                            HStack(spacing: 14) {
-                                Image(systemName: item.symbol).font(.system(size: 21, weight: .light)).frame(width: 47, height: 54).background(item.color, in: RoundedRectangle(cornerRadius: 14))
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(item.title).font(.system(size: 14, weight: .semibold))
-                                    Text("\(item.tag) · 2 min read").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.up.right").font(.system(size: 12))
-                            }.pocketCard(padding: 14)
-                        }.buttonStyle(.plain)
-                    }
-                }
             }.padding(.horizontal, 22).padding(.bottom, 30)
-        }.pageBackground().toolbar(.hidden, for: .navigationBar).sheet(item: $lesson) { LessonView(lesson: $0) }
+        }.pageBackground().toolbar(.hidden, for: .navigationBar)
     }
     private var flowSubtitle: String {
         flowMode == .flow ? "From each account to the things in your life." : "What each account carried this month."
@@ -250,56 +233,5 @@ struct CategoryDetailView: View {
                 VStack { ForEach(transactions) { transaction in Button { selected = transaction } label: { TransactionRow(transaction: transaction) }.buttonStyle(.plain) } }.pocketCard(padding: 15)
             }.padding(22)
         }.pageBackground().navigationTitle(category.rawValue).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).sheet(item: $selected) { TransactionEditor(transaction: $0) }
-    }
-}
-
-struct Lesson: Identifiable {
-    var id: String { title }
-    var title: String
-    var tag: String
-    var symbol: String
-    var color: Color
-    var intro: String
-    var sections: [(String, String)]
-    static let library = [
-        Lesson(title: "A budget that feels like you", tag: "BUDGETING", symbol: "chart.pie", color: Palette.sage,
-               intro: "A budget is a plan for your money. It makes the trade-offs visible before you spend.",
-               sections: [("Start with what’s real", "List the income you expect and the expenses you know about. A fixed expense stays relatively steady, like rent. A variable expense changes, like groceries."),
-                          ("Give categories a limit", "If you plan $200 for food and record $75 in purchases, you have $125 left in that category. Your plan can change as your needs change."),
-                          ("Read the whole picture", "Samgloyim adds spending across all your accounts. Unbudgeted categories still count toward total spending, so check those too.")]),
-        Lesson(title: "Small steps, visible progress", tag: "SAVING", symbol: "leaf", color: Palette.peach,
-               intro: "A savings goal turns a future expense into a number you can track.",
-               sections: [("Name the finish line", "A goal has a purpose and a target amount. For a $600 goal with $150 already saved, the remaining amount is $450."),
-                          ("Break down the arithmetic", "In that example, saving $50 each month would cover the $450 gap in nine months, assuming no withdrawals, interest, or changes to the target."),
-                          ("Keep progress accurate", "Update your saved total after setting money aside. This app tracks progress; it doesn’t transfer or hold your money.")]),
-        Lesson(title: "One purchase, one record", tag: "SMART TRACKING", symbol: "doc.on.doc", color: Color(hex: 0xE7E1ED),
-               intro: "A receipt and a spreadsheet can describe the same purchase. Counting both would overstate your spending.",
-               sections: [("Look for the same details", "Samgloyim flags matching merchant names, amounts, dates, transaction types, and accounts. The match ignores capitalization and punctuation."),
-                          ("A match isn’t proof", "Two coffees can cost the same amount on the same day. Review the details and keep both when they are separate purchases."),
-                          ("Know what can be missed", "A posting date or merchant name that differs between sources can prevent a match. Review imported transactions, especially OCR totals, before adding them.")])
-    ]
-}
-
-struct LessonView: View {
-    @Environment(\.dismiss) private var dismiss
-    var lesson: Lesson
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    Image(systemName: lesson.symbol).font(.system(size: 34, weight: .light)).padding(24).background(lesson.color, in: RoundedRectangle(cornerRadius: 24))
-                    Text(lesson.tag).font(.system(size: 10, weight: .semibold, design: .monospaced)).tracking(1.5).foregroundStyle(Palette.muted)
-                    Text(lesson.title).font(.system(size: 34, design: .serif))
-                    Text(lesson.intro).font(.system(size: 17)).lineSpacing(5)
-                    ForEach(lesson.sections.indices, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("0\(index + 1) / \(lesson.sections[index].0)").font(.system(size: 18, weight: .semibold))
-                            Text(lesson.sections[index].1).font(.system(size: 15)).foregroundStyle(Palette.muted).lineSpacing(6)
-                        }
-                    }
-                    Text("Simple concepts for understanding your records.").font(.footnote).foregroundStyle(Palette.muted)
-                }.padding(25)
-            }.pageBackground().navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
     }
 }

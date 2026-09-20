@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>samgloyim uses your location to name the shop you are in, so it can tell you which of your cards earns the most there. It is used while the app is open, stays on your device, and is never sent anywhere.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>samgloyim uses the camera to photograph receipts so it can read the total and match it to one of your purchases. Photos are read on your device and are not stored or uploaded.</string>
 	<key>NSAppTransportSecurity</key>

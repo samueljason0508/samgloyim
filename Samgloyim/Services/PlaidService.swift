@@ -25,7 +25,27 @@ struct PlaidTransactionPayload: Decodable {
 
 /// One sync as the bank reported it. Rows stay as payloads: which account each belongs to is the
 /// ledger's business, not the network layer's, and a payload knows only its institution.
+/// One card or bank as Plaid describes it. `officialName` is the product — "Blue Cash Everyday®" —
+/// which is what earn rates can be looked up against; `name` is whatever the bank shows the user.
+struct PlaidAccountPayload: Decodable {
+    var accountId: String
+    var name: String
+    var officialName: String?
+    var mask: String?
+    var subtype: String?
+    var isCreditCard: Bool
+    var institution: String
+
+    /// The product name to look rates up by, falling back to the display name when the bank has no
+    /// official one, and to nothing at all when neither says anything useful.
+    var productName: String? {
+        let candidate = (officialName ?? name).trimmingCharacters(in: .whitespacesAndNewlines)
+        return candidate.isEmpty ? nil : "\(institution) \(candidate)"
+    }
+}
+
 struct PlaidSync {
+    var accounts: [PlaidAccountPayload] = []
     var added: [PlaidTransactionPayload] = []
     var modified: [PlaidTransactionPayload] = []
     var removed: [String] = []
@@ -40,6 +60,7 @@ struct PlaidLinkedItem: Decodable, Identifiable {
 }
 
 private struct SyncResponse: Decodable {
+    var accounts: [PlaidAccountPayload]
     var added: [PlaidTransactionPayload]
     var modified: [PlaidTransactionPayload]
     var removed: [String]
@@ -107,10 +128,10 @@ enum PlaidService {
         let (data, response) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("api/transactions"))
         try validate(response)
         let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
-        return PlaidSync(added: decoded.added, modified: decoded.modified, removed: decoded.removed)
+        return PlaidSync(accounts: decoded.accounts, added: decoded.added, modified: decoded.modified, removed: decoded.removed)
     }
 
-    private static func post(_ path: String, body: [String: String]) async throws -> Data {
+    static func post(_ path: String, body: [String: String]) async throws -> Data {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

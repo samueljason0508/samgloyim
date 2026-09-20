@@ -201,6 +201,19 @@ final class FinanceStore: ObservableObject {
     @discardableResult func apply(_ sync: PlaidSync, addNew: Bool = true) -> Bool {
         var changed = false
         let result = update { data in
+            for payload in sync.accounts {
+                let index = data.accounts.firstIndex { $0.id == Self.accountID(forInstitution: payload.institution, in: &data) }
+                guard let index else { continue }
+                // The bank describes the card; the user owns what they call it and what it earns.
+                if data.accounts[index].officialName != payload.officialName
+                    || data.accounts[index].isCreditCard != payload.isCreditCard {
+                    data.accounts[index].officialName = payload.officialName
+                    data.accounts[index].mask = payload.mask
+                    data.accounts[index].isCreditCard = payload.isCreditCard
+                    if payload.isCreditCard { data.accounts[index].symbol = "creditcard.fill" }
+                    changed = true
+                }
+            }
             for id in sync.removed where data.transactions.contains(where: { $0.externalID == id }) {
                 data.transactions.removeAll { $0.externalID == id }
                 changed = true
@@ -256,6 +269,29 @@ final class FinanceStore: ObservableObject {
             resolved = payloads.map { $0.toTransaction(accountID: Self.accountID(forInstitution: $0.institution, in: &data)) }
         }
         return resolved
+    }
+    @discardableResult func setRewards(_ rewards: [RewardRate], for accountID: UUID) -> Bool {
+        update { data in
+            guard let index = data.accounts.firstIndex(where: { $0.id == accountID }) else { return }
+            data.accounts[index].rewards = rewards
+        }
+    }
+
+    /// Asks the backend what a card earns and files the answer against it. Failing is ordinary —
+    /// the lookup needs a key the user may not have set — so the caller is told and the rates stay
+    /// editable by hand.
+    func lookUpRewards(for account: BankAccount) async throws {
+        guard let card = account.officialName ?? (account.institution.map { "\($0) \(account.name)" }) else {
+            throw ImportError.message("There's no card name to look up. Add one first.")
+        }
+        let rates = try await RewardsService.lookup(card: card)
+        guard !rates.isEmpty else { throw ImportError.message("No published rates came back for that card. Enter them by hand.") }
+        setRewards(rates, for: account.id)
+    }
+
+    /// Cards that could be used at a place like this, best first.
+    func cards(for category: SpendingCategory, now: Date = Date()) -> [CardSuggestion] {
+        CardAdvisor.rank(data.accounts, for: category, now: now)
     }
     func duplicate(of transaction: Transaction, including pending: [Transaction] = []) -> Transaction? {
         (data.transactions + pending).first { DuplicateDetector.matches($0, transaction) }
