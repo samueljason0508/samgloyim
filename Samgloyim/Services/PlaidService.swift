@@ -94,13 +94,13 @@ enum PlaidService {
     }
 
     /// Every request goes through here, so that no call site can forget to carry the token.
-    static func request(_ path: String, method: String = "GET") -> URLRequest {
+    static func request(_ path: String, method: String = "GET", token: String? = BackendCredential.token) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
         // A free host sleeps when idle and takes most of a minute to wake, so the first
         // request after a quiet spell is slow rather than broken. Wait it out.
         request.timeoutInterval = 90
-        if let token = BackendCredential.token {
+        if let token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         return request

@@ -81,9 +81,15 @@ struct BackendAddressCard: View {
     }
 
     /// A token typed but never checked is still a token the user meant to set.
+    ///
+    /// A keychain that refuses the write leaves the app looking like the backend rejected it,
+    /// which sends the user off fixing the wrong thing — so say which one happened.
     private func save() {
         guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        BackendCredential.store(token)
-        token = ""
+        if BackendCredential.store(token) {
+            token = ""
+        } else {
+            status = "Couldn’t save the token to this device’s keychain, so it wasn’t kept."
+        }
     }
 }
