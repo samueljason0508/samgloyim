@@ -8,6 +8,7 @@ struct OverviewView: View {
     var settings: () -> Void
     var showActivity: () -> Void
     @State private var selectedTransaction: Transaction?
+    @State private var showAllCategories = false
 
     var body: some View {
         ScrollView {
@@ -82,7 +83,7 @@ struct OverviewView: View {
                 Text(Money.format(store.spent)).font(.system(size: 43, weight: .regular, design: .rounded)).tracking(-2).minimumScaleFactor(0.6).lineLimit(1).accessibilityIdentifier("monthly-spending")
                 Spacer(minLength: 0)
             }.foregroundStyle(.white)
-            sparkline.frame(height: 48).accessibilityLabel("Cumulative monthly spending")
+            sparkline.frame(height: 116).accessibilityLabel("Cumulative monthly spending, by day")
         }.padding(22).background(Palette.forest, in: RoundedRectangle(cornerRadius: 25))
     }
 
@@ -91,7 +92,31 @@ struct OverviewView: View {
         return Chart(points, id: \.day) { point in
             AreaMark(x: .value("Day", point.day), y: .value("Spending", point.amount)).foregroundStyle(LinearGradient(colors: [Palette.lime.opacity(0.20), Palette.lime.opacity(0)], startPoint: .top, endPoint: .bottom)).interpolationMethod(.monotone)
             LineMark(x: .value("Day", point.day), y: .value("Spending", point.amount)).foregroundStyle(Palette.lime).lineStyle(StrokeStyle(lineWidth: 1.8)).interpolationMethod(.monotone)
-        }.chartXAxis(.hidden).chartYAxis(.hidden)
+        }
+        // Recessive by design: the line is the subject, the axes are there to be read when asked.
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine().foregroundStyle(.white.opacity(0.08))
+                AxisValueLabel {
+                    if let day = value.as(Int.self) { Text(day == 0 ? "1" : "\(day)") }
+                }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(.white.opacity(0.08))
+                AxisValueLabel {
+                    if let amount = value.as(Double.self) { Text(Self.axisMoney(amount)) }
+                }.font(.system(size: 9, design: .monospaced)).foregroundStyle(.white.opacity(0.55))
+            }
+        }
+    }
+
+    /// Axis ticks are for reading the shape, not the exact total — that is the number above the
+    /// chart — so they stay short enough not to crowd the plot.
+    static func axisMoney(_ amount: Double) -> String {
+        amount >= 1000 ? "$\((amount / 1000).formatted(.number.precision(.fractionLength(amount >= 10000 ? 0 : 1))))k"
+                       : "$\(Int(amount))"
     }
     private var cumulativePoints: [(day: Int, amount: Double)] {
         let calendar = Calendar.current
@@ -124,7 +149,7 @@ struct OverviewView: View {
                         VStack(spacing: 4) { Text("\(store.expenses.count)").font(.system(size: 25, weight: .medium, design: .rounded)); Text("purchases").font(.system(size: 9)).foregroundStyle(Palette.muted) }
                     }.accessibilityLabel("Spending by category")
                     VStack(spacing: 12) {
-                        ForEach(Array(store.categoryTotals.prefix(4)), id: \.category) { item in
+                        ForEach(Array(store.categoryTotals.prefix(showAllCategories ? store.categoryTotals.count : 4)), id: \.category) { item in
                             HStack(spacing: 6) {
                                 Circle().fill(item.category.color).frame(width: 6, height: 6)
                                 Text(item.category.rawValue).font(.system(size: 10)).lineLimit(1)
@@ -132,7 +157,14 @@ struct OverviewView: View {
                                 Text("\(Int((Double(item.amount) / Double(max(store.spent, 1)) * 100).rounded()))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
                             }
                         }
-                        if store.categoryTotals.count > 4 { Text("+ \(store.categoryTotals.count - 4) more categories").font(.system(size: 9)).foregroundStyle(Palette.muted).frame(maxWidth: .infinity, alignment: .leading) }
+                        if store.categoryTotals.count > 4 {
+                            Button { withAnimation(.easeInOut(duration: 0.2)) { showAllCategories.toggle() } } label: {
+                                HStack(spacing: 4) {
+                                    Text(showAllCategories ? "Show fewer" : "+ \(store.categoryTotals.count - 4) more categories")
+                                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .semibold)).rotationEffect(.degrees(showAllCategories ? 180 : 0))
+                                }.font(.system(size: 9)).foregroundStyle(Palette.muted).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.plain).accessibilityIdentifier("toggle-categories")
+                        }
                     }
                 }
             }
