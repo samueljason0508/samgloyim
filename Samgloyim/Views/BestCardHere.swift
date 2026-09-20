@@ -4,7 +4,6 @@ import SwiftUI
 /// and a card that beats the others; the rest of the time it stays out of the way.
 struct BestCardHere: View {
     @EnvironmentObject var store: FinanceStore
-    var addHere: (NearbyPlace) -> Void
 
     @State private var places: [NearbyPlace] = []
     @State private var chosen: NearbyPlace?
@@ -20,7 +19,7 @@ struct BestCardHere: View {
     var body: some View {
         Group {
             if let place, let pick = CardAdvisor.headline(ranked) {
-                Button { addHere(place) } label: { card(place, pick.best, runnerUp: pick.runnerUp) }.buttonStyle(.plain)
+                card(place, pick.best, runnerUp: pick.runnerUp)
             } else if place != nil {
                 diagnosis
             } else if looking || message != nil {
@@ -53,10 +52,6 @@ struct BestCardHere: View {
             ForEach(best.caveats, id: \.self) { caveat in
                 Label(caveat, systemImage: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(.white.opacity(0.75))
             }
-            HStack(spacing: 6) {
-                Text("Add a purchase here").font(.system(size: 11, weight: .semibold))
-                Image(systemName: "arrow.up.right").font(.system(size: 9))
-            }.foregroundStyle(Palette.ink).padding(.horizontal, 13).padding(.vertical, 10).background(Palette.lime, in: Capsule())
         }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
             .background(Palette.forest, in: RoundedRectangle(cornerRadius: 22))
             .accessibilityElement(children: .combine)
