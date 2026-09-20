@@ -30,8 +30,9 @@ struct SettingsView: View {
             List {
                 Section {
                     HStack(spacing: 13) {
-                        Image(systemName: "leaf.fill").font(.system(size: 27)).foregroundStyle(Palette.lime).frame(width: 60, height: 60).background(Palette.forest, in: RoundedRectangle(cornerRadius: 19))
-                        VStack(alignment: .leading, spacing: 5) { Text("samgloyim").font(.system(size: 26, weight: .semibold, design: .rounded)); Text("A little clarity, every day.").font(.subheadline).foregroundStyle(Palette.muted) }
+                        PocketBloomMark(pocket: Palette.forest, leaf: Palette.sprout, cut: Palette.paper)
+                            .frame(width: 60, height: 60)
+                        VStack(alignment: .leading, spacing: 5) { PocketBloomWordmark(size: 26); Text("A little clarity, every day.").font(.subheadline).foregroundStyle(Palette.muted) }
                     }.padding(.vertical, 9)
                 }
                 Section {

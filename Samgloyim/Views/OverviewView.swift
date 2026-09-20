@@ -63,8 +63,9 @@ struct OverviewView: View {
     private var masthead: some View {
         HStack {
             HStack(spacing: 8) {
-                Image(systemName: "leaf.fill").font(.system(size: 13)).foregroundStyle(Palette.lime).frame(width: 29, height: 29).background(Palette.forest, in: RoundedRectangle(cornerRadius: 10))
-                Text("samgloyim").font(.system(size: 23, weight: .semibold, design: .rounded)).tracking(-1)
+                PocketBloomMark(pocket: Palette.forest, leaf: Palette.sprout, cut: Palette.background)
+                    .frame(width: 29, height: 29)
+                PocketBloomWordmark(size: 23)
             }
             Spacer()
             Button(action: settings) {
