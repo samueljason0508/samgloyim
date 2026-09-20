@@ -28,8 +28,22 @@ struct TransactionEditor: View {
     }
     private var draft: Transaction? {
         guard let cents = Money.parse(amount), cents > 0, let accountID else { return nil }
-        return Transaction(id: transaction?.id ?? UUID(), merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), amount: cents,
-            date: date, category: category, accountID: accountID, kind: kind, source: transaction?.source ?? .manual, note: note)
+        // Edit in place rather than rebuild: constructing a fresh Transaction here would drop the
+        // bank's id, its detailed category, an attached receipt and the transfer flag — none of
+        // which this screen shows, and all of which the row needs to keep.
+        var draft = transaction ?? Transaction(merchant: "", amount: 0, date: date, category: category, accountID: accountID)
+        draft.merchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.amount = cents
+        draft.date = date
+        draft.accountID = accountID
+        draft.kind = kind
+        draft.note = note
+        // Choosing a category by hand makes it the user's; a later sync must not overwrite it.
+        if draft.category != category {
+            draft.category = category
+            draft.categoryPinned = true
+        }
+        return draft
     }
 
     var body: some View {

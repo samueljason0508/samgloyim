@@ -159,7 +159,7 @@ final class FinanceTests: XCTestCase {
         // GENERAL_SERVICES covers tuition, insurance and car servicing alike, so reading only the
         // primary category files all three under Other.
         XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_EDUCATION"), .education)
-        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_INSURANCE"), .home)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_INSURANCE"), .services)
         XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_AUTOMOTIVE"), .transport)
         XCTAssertEqual(SpendingCategory.fromPlaid(primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_STUDENT_LOAN_PAYMENT"), .education)
         // A detailed value we do not map falls back to the primary rather than guessing.
@@ -225,6 +225,7 @@ final class FinanceTests: XCTestCase {
         // A category the user chose by hand is theirs, and a later sync must not overwrite it.
         var edited = try XCTUnwrap(store.data.transactions.first)
         edited.category = .fun
+        edited.categoryPinned = true
         XCTAssertTrue(store.save(edited))
         XCTAssertFalse(store.apply(PlaidSync(modified: [posted])))
         XCTAssertEqual(store.data.transactions.first?.category, .fun)
@@ -427,6 +428,113 @@ final class FinanceTests: XCTestCase {
         XCTAssertEqual(OverviewView.axisMoney(450), "$450")
         XCTAssertEqual(OverviewView.axisMoney(2500), "$2.5k")
         XCTAssertEqual(OverviewView.axisMoney(12000), "$12k")
+    }
+
+    /// Every primary Plaid publishes. If one is missing from the table, its whole branch of the
+    /// taxonomy silently lands in Other — which is the bug this bucketing exists to end.
+    private static let plaidPrimaries = [
+        "INCOME", "TRANSFER_IN", "TRANSFER_OUT", "LOAN_PAYMENTS", "BANK_FEES", "ENTERTAINMENT",
+        "FOOD_AND_DRINK", "GENERAL_MERCHANDISE", "HOME_IMPROVEMENT", "MEDICAL", "PERSONAL_CARE",
+        "GENERAL_SERVICES", "GOVERNMENT_AND_NON_PROFIT", "TRANSPORTATION", "TRAVEL", "RENT_AND_UTILITIES"
+    ]
+
+    func testEveryPlaidPrimaryHasSomewhereToLand() {
+        for primary in Self.plaidPrimaries {
+            let resolved = SpendingCategory.fromPlaid(primary: primary, detailed: nil)
+            XCTAssertNotNil(resolved, "\(primary) resolves to nothing")
+            // Income and incoming transfers are excluded from spending, so Other is right for them.
+            if primary != "INCOME" && primary != "TRANSFER_IN" {
+                XCTAssertNotEqual(resolved, .other, "\(primary) still falls through to Other")
+            }
+        }
+    }
+
+    func testSpendingPrimariesLandWhereAPersonWouldPutThem() {
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "BANK_FEES", detailed: "BANK_FEES_ATM_FEES"), .fees)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GOVERNMENT_AND_NON_PROFIT", detailed: nil), .government)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "PERSONAL_CARE", detailed: "PERSONAL_CARE_HAIR_AND_BEAUTY"), .personalCare)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "TRAVEL", detailed: "TRAVEL_FLIGHTS"), .travel)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_STORAGE"), .services)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_TRANSFER_OUT_FROM_APPS"), .people)
+        // A detailed value the app files somewhere other than its primary would.
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "FOOD_AND_DRINK", detailed: "FOOD_AND_DRINK_GROCERIES"), .groceries)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "ENTERTAINMENT", detailed: "ENTERTAINMENT_TV_AND_MOVIES"), .subscriptions)
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "ENTERTAINMENT", detailed: "ENTERTAINMENT_VIDEO_GAMES"), .fun)
+        // A detailed value nobody has mapped still resolves through its primary rather than failing.
+        XCTAssertEqual(SpendingCategory.fromPlaid(primary: "MEDICAL", detailed: "MEDICAL_SOMETHING_NEW"), .health)
+    }
+
+    func testNewKeywordRulesDoNotShadowTheOldOnes() {
+        XCTAssertEqual(SpendingCategory.infer(from: "Zelle to Prateek"), .people)
+        XCTAssertEqual(SpendingCategory.infer(from: "Amex Send: Add Money"), .people)
+        XCTAssertEqual(SpendingCategory.infer(from: "LATE FEE"), .fees)
+        XCTAssertEqual(SpendingCategory.infer(from: "Interest Charge on Purchases"), .fees)
+        XCTAssertEqual(SpendingCategory.infer(from: "NCDMV"), .government)
+        XCTAssertEqual(SpendingCategory.infer(from: "Anthropic"), .subscriptions)
+        // The rules are ordered and first-match-wins, so the old ones must still win where they did.
+        XCTAssertEqual(SpendingCategory.infer(from: "Trader Joe's"), .groceries)
+        XCTAssertEqual(SpendingCategory.infer(from: "Campus Cafe"), .food)
+        XCTAssertEqual(SpendingCategory.infer(from: "Uber"), .transport)
+        XCTAssertEqual(SpendingCategory.infer(from: "Something unheard of"), .other)
+    }
+
+    func testAVagueAnswerFromTheBankLosesToAMerchantWeRecognise() {
+        // "Other general services" is the bank admitting it does not know; the name does.
+        XCTAssertEqual(SpendingCategory.resolve(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_OTHER_GENERAL_SERVICES", merchant: "Anthropic"), .subscriptions)
+        // A definite answer from the bank still wins over a keyword that would guess otherwise.
+        XCTAssertEqual(SpendingCategory.resolve(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_INSURANCE", merchant: "Auto Owners"), .services)
+        // A vague answer with nothing recognisable in the name keeps the bank's bucket.
+        XCTAssertEqual(SpendingCategory.resolve(primary: "GENERAL_SERVICES", detailed: "GENERAL_SERVICES_OTHER_GENERAL_SERVICES", merchant: "Qtsr Ltd"), .services)
+        // No bank opinion at all falls through to the merchant name.
+        XCTAssertEqual(SpendingCategory.resolve(primary: nil, detailed: nil, merchant: "Trader Joe's"), .groceries)
+    }
+
+    func testTheBanksOwnWordingIsMadeReadable() {
+        XCTAssertEqual(SpendingDetail.name(for: "FOOD_AND_DRINK_COFFEE"), "Coffee")
+        XCTAssertEqual(SpendingDetail.name(for: "TRANSPORTATION_TAXIS_AND_RIDE_SHARES"), "Taxis & ride shares")
+        XCTAssertEqual(SpendingDetail.name(for: "BANK_FEES_INTEREST_CHARGE"), "Interest charge")
+        // The "other" values repeat their own primary; say Other once rather than twice.
+        XCTAssertEqual(SpendingDetail.name(for: "FOOD_AND_DRINK_OTHER_FOOD_AND_DRINK"), "Other food & drink")
+        // A value invented after this code was written still reads as words, not shouting caps.
+        XCTAssertEqual(SpendingDetail.name(for: "MEDICAL_ROBOT_SURGERY"), "Robot surgery")
+        XCTAssertFalse(SpendingDetail.name(for: "SOMETHING_ENTIRELY_NEW").contains("_"))
+    }
+
+    func testEveryCategoryHasItsOwnColourAndNoneIsPositional() {
+        let colours = SpendingCategory.allCases.map { $0.color.description }
+        XCTAssertEqual(Set(colours).count, SpendingCategory.allCases.count, "two categories share a colour")
+        // The old implementation indexed a nine-item array by position: a tenth case crashed, and
+        // inserting one repainted everything after it.
+        XCTAssertNotEqual(SpendingCategory.food.color.description, SpendingCategory.travel.color.description)
+    }
+
+    @MainActor func testASyncRefilesItsOwnGuessesButNeverTheUsersChoice() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        let payload = PlaidTransactionPayload(id: "p1", merchant: "Delta", amountCents: 45_000, kind: "expense",
+                                              date: "2026-09-18", datetime: nil, category: "TRAVEL",
+                                              categoryDetailed: "TRAVEL_FLIGHTS", institution: "Amex", pending: false)
+        XCTAssertTrue(store.apply(PlaidSync(added: [payload])))
+        let stored = try XCTUnwrap(store.data.transactions.first)
+        XCTAssertEqual(stored.category, .travel)
+        XCTAssertEqual(stored.detailedCategory, "TRAVEL_FLIGHTS", "the bank's own wording is kept, not just used and dropped")
+
+        // A machine guess is the sync's to revise.
+        var machineGuessed = stored
+        machineGuessed.category = .shopping
+        XCTAssertTrue(store.save(machineGuessed))
+        XCTAssertTrue(store.apply(PlaidSync(modified: [payload])))
+        XCTAssertEqual(store.data.transactions.first?.category, .travel)
+
+        // A choice the user made is not.
+        var pinned = try XCTUnwrap(store.data.transactions.first)
+        pinned.category = .fun
+        pinned.categoryPinned = true
+        XCTAssertTrue(store.save(pinned))
+        store.apply(PlaidSync(modified: [payload]))
+        XCTAssertEqual(store.data.transactions.first?.category, .fun, "a sync overwrote a category the user picked")
     }
 
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {

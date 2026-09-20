@@ -13,12 +13,12 @@ struct PlaidTransactionPayload: Decodable {
     var pending: Bool
 
     func toTransaction(accountID: UUID) -> Transaction {
-        let category = SpendingCategory.fromPlaid(primary: category, detailed: categoryDetailed)
-            ?? SpendingCategory.infer(from: merchant)
+        let category = SpendingCategory.resolve(primary: category, detailed: categoryDetailed, merchant: merchant)
         let parsedDate = PlaidService.timestamp(from: datetime) ?? PlaidService.dateFormatter.date(from: date) ?? Date()
         return Transaction(merchant: merchant, amount: amountCents, date: parsedDate, category: category, accountID: accountID,
             kind: kind == "income" ? .income : .expense, source: .plaid,
             note: pending ? "Pending at \(institution)" : institution, externalID: id,
+            detailedCategory: categoryDetailed,
             isTransfer: SpendingCategory.isTransfer(primary: self.category, detailed: categoryDetailed, merchant: merchant))
     }
 }

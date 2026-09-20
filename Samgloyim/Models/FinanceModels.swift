@@ -22,6 +22,12 @@ enum Money {
     static func input(_ cents: Int) -> String { String(format: "%.2f", Double(cents) / 100) }
 }
 
+/// The top level of the bucketing system: what the donut, the filters and the flow diagram speak.
+///
+/// It mirrors Plaid's spending primaries so that every bank row has somewhere to land, plus the two
+/// splits this app has always cared about — groceries out of food, travel out of transport. New
+/// cases are appended, never inserted: raw values are persisted in the save file and matched by CSV
+/// import, and `.other` must keep its meaning of "nothing decided this yet".
 enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
     case food = "Food & drink"
     case groceries = "Groceries"
@@ -32,6 +38,13 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
     case fun = "Entertainment"
     case health = "Health"
     case other = "Other"
+    case travel = "Travel"
+    case personalCare = "Personal care"
+    case subscriptions = "Subscriptions"
+    case people = "People"
+    case fees = "Fees & interest"
+    case government = "Government"
+    case services = "Services"
 
     var id: String { rawValue }
     var symbol: String {
@@ -45,53 +58,112 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
         case .fun: "sparkles.tv.fill"
         case .health: "heart.fill"
         case .other: "ellipsis"
+        case .travel: "airplane"
+        case .personalCare: "scissors"
+        case .subscriptions: "repeat.circle.fill"
+        case .people: "person.2.fill"
+        case .fees: "percent"
+        case .government: "building.columns.fill"
+        case .services: "wrench.and.screwdriver.fill"
         }
     }
 
     static func infer(from merchant: String) -> Self {
         let name = merchant.lowercased()
+        // Ordered, first match wins. Anything narrow goes above anything that could swallow it:
+        // "late fee" before food's "cafe"-alikes, "amex send" before any shopping rule.
         let rules: [(Self, [String])] = [
+            (.people, ["zelle", "venmo", "cash app", "amex send", "paypal transfer"]),
+            (.fees, ["late fee", "interest charge", "atm fee", "overdraft", "service charge", "foreign transaction fee"]),
+            (.government, ["dmv", "irs", "tax payment", "court", "usps", "post office", "city of", "county"]),
+            (.subscriptions, ["spotify", "netflix", "anthropic", "openai", "subscription", "hulu", "disney+", "icloud", "patreon"]),
             (.groceries, ["grocery", "groceries", "trader joe", "whole foods", "aldi", "market"]),
             (.food, ["coffee", "cafe", "café", "starbucks", "chipotle", "pizza", "restaurant", "bakery"]),
-            (.transport, ["uber", "lyft", "metro", "transit", "shell", "gas", "mta"]),
+            (.travel, ["airline", "airways", "hotel", "motel", "airbnb", "expedia", "flight"]),
+            (.transport, ["uber", "lyft", "metro", "transit", "shell", "gas", "mta", "parking", "toll"]),
             (.education, ["book", "school", "tuition", "supplies", "course"]),
             (.home, ["rent", "electric", "internet", "utility", "utilities"]),
-            (.fun, ["spotify", "netflix", "cinema", "movie", "concert"]),
-            (.health, ["pharmacy", "cvs", "doctor", "gym"]),
+            (.fun, ["cinema", "movie", "concert", "steam", "arcade"]),
+            (.personalCare, ["salon", "barber", "spa", "laundry", "dry clean"]),
+            (.health, ["pharmacy", "cvs", "doctor", "dental", "gym", "clinic"]),
+            (.services, ["insurance", "storage", "shipping", "legal", "childcare", "repair"]),
             (.shopping, ["target", "amazon", "store", "uniqlo", "nike"])
         ]
         return rules.first { $0.1.contains(where: name.contains) }?.0 ?? .other
     }
 
-    /// Plaid's detailed category carries far more than its primary one — `GENERAL_SERVICES`
-    /// alone covers tuition, insurance and subscriptions, which is why so much used to pile up
-    /// in Other. The detailed value is consulted first and the primary is the fallback.
-    static func fromPlaid(primary: String?, detailed: String?) -> Self? {
-        switch detailed {
-        case "GENERAL_SERVICES_EDUCATION": return .education
-        case "GENERAL_SERVICES_INSURANCE", "LOAN_PAYMENTS_MORTGAGE_PAYMENT": return .home
-        case "GENERAL_SERVICES_AUTOMOTIVE": return .transport
-        case "GENERAL_SERVICES_CHILDCARE", "GENERAL_SERVICES_CONSULTING_AND_LEGAL",
-             "GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING", "GENERAL_SERVICES_POSTAGE_AND_SHIPPING",
-             "GENERAL_SERVICES_STORAGE": return .other
-        case "LOAN_PAYMENTS_STUDENT_LOAN_PAYMENT": return .education
-        case "LOAN_PAYMENTS_CAR_PAYMENT": return .transport
-        default: break
+    /// The whole pipeline in one call: the bank's answer, unless the bank has admitted it does not
+    /// have one.
+    ///
+    /// Plaid's `*_OTHER_*` values are its own catch-alls — "other general services" says little more
+    /// than nothing — and a merchant name the keyword table recognises beats them. Anthropic arrives
+    /// as GENERAL_SERVICES_OTHER_GENERAL_SERVICES and is plainly a subscription.
+    static func resolve(primary: String?, detailed: String?, merchant: String) -> Self {
+        if let detailed, detailed.contains("_OTHER_") {
+            let guess = infer(from: merchant)
+            if guess != .other { return guess }
         }
-        guard let primary else { return nil }
-        switch primary {
-        case "GROCERIES": return .groceries
-        case "FOOD_AND_DRINK": return .food
-        case "TRANSPORTATION", "TRAVEL": return .transport
-        case "GENERAL_MERCHANDISE", "RETAIL": return .shopping
-        case "RENT_AND_UTILITIES", "HOME_IMPROVEMENT": return .home
-        case "ENTERTAINMENT": return .fun
-        case "MEDICAL", "PERSONAL_CARE": return .health
-        case "LOAN_PAYMENTS": return .home
-        case "GENERAL_SERVICES", "GOVERNMENT_AND_NON_PROFIT", "BANK_FEES", "TRANSFER_IN", "TRANSFER_OUT", "INCOME": return .other
-        default: return nil
-        }
+        return fromPlaid(primary: primary, detailed: detailed) ?? infer(from: merchant)
     }
+
+    /// Where a bank row belongs, resolved in three passes: the detailed value when this app files
+    /// it somewhere other than its primary would, then the primary — all sixteen of them, so no
+    /// row can fall through — and finally nil, which leaves the merchant name to `infer`.
+    static func fromPlaid(primary: String?, detailed: String?) -> Self? {
+        if let detailed, let override = detailedOverrides[detailed] { return override }
+        guard let primary else { return nil }
+        return primaries[primary]
+    }
+
+    /// Only the detailed values this app disagrees with its own primary about. Everything else is
+    /// covered by the primary table, which is the point of having one.
+    private static let detailedOverrides: [String: Self] = [
+        // The app has always kept groceries apart from eating out.
+        "FOOD_AND_DRINK_GROCERIES": .groceries,
+        // A streaming bill is a subscription, not a night out.
+        "ENTERTAINMENT_TV_AND_MOVIES": .subscriptions,
+        "ENTERTAINMENT_MUSIC_AND_AUDIO": .subscriptions,
+        // GENERAL_SERVICES is the widest primary Plaid has; these four are not "services".
+        "GENERAL_SERVICES_EDUCATION": .education,
+        "GENERAL_SERVICES_AUTOMOTIVE": .transport,
+        "GENERAL_SERVICES_CHILDCARE": .services,
+        "GENERAL_SERVICES_INSURANCE": .services,
+        // A loan payment is filed by what the loan bought.
+        "LOAN_PAYMENTS_MORTGAGE_PAYMENT": .home,
+        "LOAN_PAYMENTS_STUDENT_LOAN_PAYMENT": .education,
+        "LOAN_PAYMENTS_CAR_PAYMENT": .transport,
+        // Phone and internet are bills; the rest of RENT_AND_UTILITIES already is.
+        "RENT_AND_UTILITIES_INTERNET_AND_CABLE": .home,
+        "RENT_AND_UTILITIES_TELEPHONE": .home,
+        // A vet bill is the pet's health, not the owner's — but it is medical spending either way.
+        "MEDICAL_VETERINARY_SERVICES": .health
+    ]
+
+    /// Every primary Plaid publishes. Total by construction: adding a primary to this table is the
+    /// only thing needed for a whole new branch of the taxonomy to stop landing in Other.
+    private static let primaries: [String: Self] = [
+        "FOOD_AND_DRINK": .food,
+        "GROCERIES": .groceries,
+        "TRANSPORTATION": .transport,
+        "TRAVEL": .travel,
+        "GENERAL_MERCHANDISE": .shopping,
+        "RETAIL": .shopping,
+        "HOME_IMPROVEMENT": .home,
+        "RENT_AND_UTILITIES": .home,
+        "LOAN_PAYMENTS": .home,
+        "MEDICAL": .health,
+        "PERSONAL_CARE": .personalCare,
+        "ENTERTAINMENT": .fun,
+        "GENERAL_SERVICES": .services,
+        "GOVERNMENT_AND_NON_PROFIT": .government,
+        "BANK_FEES": .fees,
+        // A self-transfer never reaches a spending total — `isTransfer` removes it — so the only
+        // TRANSFER_OUT rows that get here are the ones paying a person.
+        "TRANSFER_OUT": .people,
+        // Income is excluded from the donut, so its category is cosmetic.
+        "TRANSFER_IN": .other,
+        "INCOME": .other
+    ]
 
     /// Issuers whose person-to-person service the bank reports as a move between the user's own
     /// accounts. Amex Send is Venmo-style — the money leaves for someone else — whatever Plaid
@@ -124,6 +196,44 @@ enum SpendingCategory: String, Codable, CaseIterable, Identifiable {
             // common case rather than inflating spending with the user's own money.
             return detailed == nil
         }
+    }
+}
+
+/// The second level: what the bank itself called the purchase, kept as the string it sent.
+///
+/// Plaid publishes 117 of these and adds more over time. Nothing in the app branches on one — they
+/// are displayed, grouped and counted — so an enum would be 117 hand-written cases that go stale
+/// the day the taxonomy grows, and a string costs nothing and never needs maintaining.
+enum SpendingDetail {
+    /// "FOOD_AND_DRINK_COFFEE" reads as "Coffee"; the primary prefix is already the category above
+    /// it, so repeating it is noise. A value that is only its own primary spelt twice
+    /// ("..._OTHER_FOOD_AND_DRINK") keeps the word "Other" and drops the echo.
+    static func name(for raw: String) -> String {
+        let words = raw.split(separator: "_").map(String.init)
+        guard !words.isEmpty else { return raw }
+        if let index = words.firstIndex(of: "OTHER") {
+            let tail = words[(index + 1)...].joined(separator: " ")
+            return sentenceCased(tail.isEmpty ? words.joined(separator: " ") : "OTHER " + tail)
+        }
+        // Drop the longest known primary that prefixes it; what remains is the useful part.
+        for primary in knownPrefixes where raw.hasPrefix(primary + "_") {
+            return sentenceCased(String(raw.dropFirst(primary.count + 1)))
+        }
+        return sentenceCased(raw)
+    }
+
+    private static let knownPrefixes = ["GOVERNMENT_AND_NON_PROFIT", "GENERAL_MERCHANDISE", "RENT_AND_UTILITIES",
+                                        "INVESTMENT_AND_RETIREMENT", "HOME_IMPROVEMENT", "TRANSPORTATION",
+                                        "FOOD_AND_DRINK", "GENERAL_SERVICES", "ENTERTAINMENT", "LOAN_PAYMENTS",
+                                        "PERSONAL_CARE", "TRANSFER_OUT", "TRANSFER_IN", "BANK_FEES", "MEDICAL",
+                                        "TRAVEL", "INCOME"].sorted { $0.count > $1.count }
+
+    private static func sentenceCased(_ raw: String) -> String {
+        let words = raw.split(whereSeparator: { $0 == "_" || $0 == " " }).map { $0.lowercased() }
+        guard let first = words.first else { return raw }
+        let rest = words.dropFirst().map { $0 == "and" ? "&" : $0 }.joined(separator: " ")
+        let head = first.prefix(1).uppercased() + first.dropFirst()
+        return rest.isEmpty ? head : "\(head) \(rest)"
     }
 }
 
@@ -203,6 +313,11 @@ struct Transaction: Identifiable, Codable, Equatable {
     var receipt: ReceiptAttachment?
     /// Plaid's transaction id, so a later sync can enrich or remove the row it already sent.
     var externalID: String?
+    /// The bank's own detailed category, kept verbatim — the second level of the bucketing.
+    var detailedCategory: String?
+    /// Set when the user picks a category by hand. Without it there is no way to tell their choice
+    /// from an earlier machine guess, and a sync would quietly overwrite both.
+    var categoryPinned: Bool?
     /// Moves money rather than spending it; excluded from spending and income totals.
     /// Optional because a non-optional Bool would fail to decode every save written before it
     /// existed. Absent means the same as false: nothing was ever flagged as a transfer.

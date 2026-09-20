@@ -12,6 +12,8 @@ enum Palette {
     static let peach = Color(hex: 0xF8E5D7)
     static let line = Color(hex: 0xE6E7DF)
     static let colors: [Color] = [forest, orange, Color(hex: 0x7A8D65), Color(hex: 0xB8A3C2), Color(hex: 0x8AA4B1), Color(hex: 0xD4BC82), Color(hex: 0x9DAE91), Color(hex: 0xCB8C85), Color(hex: 0xAAA89F)]
+    /// The wedge everything too small to name is folded into.
+    static let remainder = Color(hex: 0xC9C6BC)
 }
 
 extension Color {
@@ -19,7 +21,35 @@ extension Color {
 }
 
 extension SpendingCategory {
-    var color: Color { Palette.colors[Self.allCases.firstIndex(of: self) ?? 0] }
+    /// Named per case, never indexed by position: a colour has to follow the category, so that
+    /// adding a bucket cannot repaint the ones after it — and cannot run off the end of an array,
+    /// which the old `Palette.colors[allCases.firstIndex(of:)]` would have done at the tenth case.
+    ///
+    /// Sixteen categorical hues cannot all be told apart — no palette manages it, and this one is
+    /// deliberately muted on top of that. The donut is what makes that survivable: it only draws
+    /// slices worth 2.5% or more and folds the rest into one grey wedge, so at most eight colours
+    /// are ever on screen together. Colour is never the only cue either — every legend row and
+    /// every breakdown row carries the category's name beside its dot.
+    var color: Color {
+        switch self {
+        case .food: Palette.forest
+        case .groceries: Color(hex: 0x7A8D65)
+        case .transport: Color(hex: 0x3E6E8E)
+        case .shopping: Color(hex: 0xB8A3C2)
+        case .education: Color(hex: 0x8C6A4A)
+        case .home: Color(hex: 0xD4BC82)
+        case .fun: Color(hex: 0xCB8C85)
+        case .health: Palette.orange
+        case .other: Color(hex: 0xAAA89F)
+        case .travel: Color(hex: 0x6FB3A8)
+        case .personalCare: Color(hex: 0x8E3B5F)
+        case .subscriptions: Color(hex: 0x4C4585)
+        case .people: Color(hex: 0xB4531F)
+        case .fees: Color(hex: 0x7A2E2E)
+        case .government: Color(hex: 0xB9C4CC)
+        case .services: Color(hex: 0x6B5B3E)
+        }
+    }
 }
 
 extension View {

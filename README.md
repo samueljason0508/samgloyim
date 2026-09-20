@@ -26,6 +26,7 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - CSV import with review, row-level validation, inferred categories, and possible duplicate detection. Invalid rows are listed; they are never silently imported.
 - CSV export through the system Files picker.
 - Calculated monthly insights.
+- **Two-level categories.** The top level is 16 buckets wide — mirroring Plaid's spending primaries, plus the splits this app cares about — so no bank row falls through to Other. Underneath, each synced row keeps the bank's own detailed category verbatim, so Food & drink opens into Fast food, Restaurant and Vending machines. A category you pick by hand is pinned and no sync overwrites it.
 - **Which card should I use here?** On Overview, one tap finds the shop you are standing in and names the card that earns the most there. MapKit identifies the place, so there is no merchant database to build; earn rates are looked up per card and are editable, because a rotating category changes every quarter and a rate that has run out is worse than no rate.
 - Atomic JSON persistence in the app's Application Support directory. Corrupt or newer-format saves are preserved rather than overwritten.
 

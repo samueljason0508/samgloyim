@@ -155,6 +155,17 @@ struct OverviewView: View {
         amount >= 1000 ? "$\((amount / 1000).formatted(.number.precision(.fractionLength(amount >= 10000 ? 0 : 1))))k"
                        : "$\(Int(amount))"
     }
+    /// Sixteen categories is more slices than a donut can carry, so anything under a fortieth of
+    /// the month folds into one remainder wedge. The legend beside it still lists every category —
+    /// this is about the shape being readable, not about hiding where money went.
+    private var donutSlices: [(name: String, amount: Int, color: Color)] {
+        let total = max(store.spent, 1)
+        let named = store.categoryTotals.filter { Double($0.amount) / Double(total) >= 0.025 }
+        let remainder = store.spent - named.reduce(0) { $0 + $1.amount }
+        return named.map { (name: $0.category.rawValue, amount: $0.amount, color: $0.category.color) }
+            + (remainder > 0 ? [(name: "Everything else", amount: remainder, color: Palette.remainder)] : [])
+    }
+
     private var cumulativePoints: [(day: Int, amount: Double)] {
         let calendar = Calendar.current
         let days = calendar.range(of: .day, in: .month, for: store.selectedMonth)?.count ?? 30
@@ -180,8 +191,8 @@ struct OverviewView: View {
                 Text("Your spending breakdown will appear here.").font(.subheadline).foregroundStyle(Palette.muted).padding(.vertical, 20)
             } else {
                 HStack(spacing: 22) {
-                    Chart(store.categoryTotals, id: \.category) { item in
-                        SectorMark(angle: .value("Amount", item.amount), innerRadius: .ratio(0.73), angularInset: 2).cornerRadius(3).foregroundStyle(item.category.color)
+                    Chart(donutSlices, id: \.name) { item in
+                        SectorMark(angle: .value("Amount", item.amount), innerRadius: .ratio(0.73), angularInset: 2).cornerRadius(3).foregroundStyle(item.color)
                     }.frame(width: 126, height: 126).chartBackground { _ in
                         VStack(spacing: 4) { Text("\(store.expenses.count)").font(.system(size: 25, weight: .medium, design: .rounded)); Text("purchases").font(.system(size: 9)).foregroundStyle(Palette.muted) }
                     }.accessibilityLabel("Spending by category")

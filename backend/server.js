@@ -198,7 +198,8 @@ app.get('/api/transactions', async (req, res) => {
 // Answers are cached on disk: a card's rates are worth re-checking occasionally, not every launch.
 const REWARDS_PATH = path.join(DATA_DIR, 'rewards.json');
 const REWARDS_TTL_DAYS = 14;
-const CATEGORIES = ['Food & drink', 'Groceries', 'Transport', 'Shopping', 'Education', 'Home & bills', 'Entertainment', 'Health', 'Other'];
+const CATEGORIES = ['Food & drink', 'Groceries', 'Transport', 'Travel', 'Shopping', 'Education', 'Home & bills',
+  'Entertainment', 'Subscriptions', 'Health', 'Personal care', 'People', 'Fees & interest', 'Government', 'Services', 'Other'];
 
 function loadRewards() {
   if (!fs.existsSync(REWARDS_PATH)) return {};

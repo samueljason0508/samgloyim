@@ -230,8 +230,36 @@ struct CategoryDetailView: View {
                 CategoryIcon(category: category, size: 65)
                 Text(Money.format(transactions.reduce(0) { $0 + $1.amount })).font(.system(size: 39, design: .rounded))
                 Text("\(transactions.count) purchases · \(store.selectedMonth.formatted(.dateTime.month(.wide).year()))").font(.subheadline).foregroundStyle(Palette.muted)
+                if breakdown.count > 1 { detailBreakdown }
                 VStack { ForEach(transactions) { transaction in Button { selected = transaction } label: { TransactionRow(transaction: transaction) }.buttonStyle(.plain) } }.pocketCard(padding: 15)
             }.padding(22)
         }.pageBackground().navigationTitle(category.rawValue).navigationBarTitleDisplayMode(.inline).toolbar(.visible, for: .navigationBar).sheet(item: $selected) { TransactionEditor(transaction: $0) }
+    }
+
+    /// The second level: what the bank called each purchase inside this category. Rows it said
+    /// nothing about — anything typed in by hand — gather under one honest heading rather than
+    /// being guessed at.
+    private var breakdown: [(name: String, amount: Int, count: Int)] {
+        Dictionary(grouping: transactions) { $0.detailedCategory.map(SpendingDetail.name(for:)) ?? "Not specified" }
+            .map { (name: $0.key, amount: $0.value.reduce(0) { $0 + $1.amount }, count: $0.value.count) }
+            .sorted { $0.amount > $1.amount }
+    }
+
+    private var detailBreakdown: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text("WHAT IT WAS").font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(1.2).foregroundStyle(Palette.muted)
+            let total = max(transactions.reduce(0) { $0 + $1.amount }, 1)
+            ForEach(breakdown, id: \.name) { item in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(item.count)×").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+                        Text(Money.format(item.amount)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                    }
+                    ProgressTrack(value: Double(item.amount) / Double(total), color: category.color, height: 4)
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).pocketCard(padding: 16)
     }
 }

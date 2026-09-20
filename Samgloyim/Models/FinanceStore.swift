@@ -222,8 +222,7 @@ final class FinanceStore: ObservableObject {
                 let incoming = payload.toTransaction(accountID: Self.accountID(forInstitution: payload.institution, in: &data))
                 if let index = Self.index(of: incoming, in: data.transactions) {
                     var existing = data.transactions[index]
-                    // The bank owns these. A category the user picked by hand is left alone; only
-                    // a row we never managed to categorize takes the bank's answer.
+                    // The bank owns these.
                     existing.merchant = incoming.merchant
                     existing.amount = incoming.amount
                     existing.date = incoming.date
@@ -232,7 +231,10 @@ final class FinanceStore: ObservableObject {
                     existing.note = incoming.note
                     existing.externalID = incoming.externalID
                     existing.accountID = incoming.accountID
-                    if existing.category == .other { existing.category = incoming.category }
+                    existing.detailedCategory = incoming.detailedCategory
+                    // A category the user picked by hand is theirs. Anything else is a machine
+                    // guess, and a later sync — or a better mapping — is entitled to redo it.
+                    if existing.categoryPinned != true { existing.category = incoming.category }
                     guard existing != data.transactions[index] else { continue }
                     data.transactions[index] = existing
                     changed = true
