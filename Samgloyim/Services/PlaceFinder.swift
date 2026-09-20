@@ -20,7 +20,7 @@ enum PlaceFinder {
     static let searchRadius: CLLocationDistance = 150
 
     static func nearbyPlaces() async throws -> [NearbyPlace] {
-        let here = try await LocationReading.current()
+        let here = try await fix()
         let request = MKLocalPointsOfInterestRequest(center: here.coordinate, radius: searchRadius)
         let response = try await MKLocalSearch(request: request).start()
         return response.mapItems.compactMap { item in
@@ -28,6 +28,22 @@ enum PlaceFinder {
                   let category = category(for: poi), let location = item.placemark.location else { return nil }
             return NearbyPlace(name: name, category: category, metresAway: Int(here.distance(from: location).rounded()))
         }.sorted { $0.metresAway < $1.metresAway }
+    }
+
+    /// A first fix often fails while the radio is still warming up — indoors, or on a simulator with
+    /// no location set yet — and CoreLocation reports that as `locationUnknown`. It is worth one
+    /// more try before telling the user anything, and the raw error is never worth showing them.
+    private static func fix() async throws -> CLLocation {
+        do {
+            return try await LocationReading.current()
+        } catch let error as CLError where error.code == .locationUnknown {
+            try? await Task.sleep(for: .seconds(2))
+            do {
+                return try await LocationReading.current()
+            } catch {
+                throw ImportError.message("Couldn’t work out where you are. If you’re indoors, try again near a window — on a simulator, set a location in Features › Location.")
+            }
+        }
     }
 
     /// Only the categories this app can actually spend in. Anything else — a park, a school — is not

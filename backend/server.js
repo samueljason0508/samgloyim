@@ -248,7 +248,7 @@ app.post('/api/card-rewards', async (req, res) => {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
+      model: 'gemini-3-flash-preview',
       // Search grounding is what makes this work for a card nobody wrote into the app. The API
       // refuses to mix a search tool with any other, so the JSON shape is asked for in the prompt
       // rather than enforced by a response schema.

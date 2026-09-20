@@ -281,7 +281,10 @@ final class FinanceStore: ObservableObject {
     /// the lookup needs a key the user may not have set — so the caller is told and the rates stay
     /// editable by hand.
     func lookUpRewards(for account: BankAccount) async throws {
-        guard let card = account.officialName ?? (account.institution.map { "\($0) \(account.name)" }) else {
+        // The issuer matters: "Blue Cash Everyday®" alone is ambiguous, "American Express Blue Cash
+        // Everyday®" is not, and a search is only as good as the name it is given.
+        let product = account.officialName ?? account.name
+        guard let card = account.institution.map({ "\($0) \(product)" }) ?? account.officialName else {
             throw ImportError.message("There's no card name to look up. Add one first.")
         }
         let rates = try await RewardsService.lookup(card: card)
