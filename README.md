@@ -28,6 +28,11 @@ The first launch includes clearly labeled fictional sample data. Open the slider
 - Calculated monthly insights.
 - **Two-level categories.** The top level is 16 buckets wide — mirroring Plaid's spending primaries, plus the splits this app cares about — so no bank row falls through to Other. Underneath, each synced row keeps the bank's own detailed category verbatim, so Food & drink opens into Fast food, Restaurant and Vending machines. A category you pick by hand is pinned and no sync overwrites it.
 - **Which card should I use here?** On Overview, one tap finds the shop you are standing in and names the card that earns the most there. MapKit identifies the place, so there is no merchant database to build; earn rates are looked up per card and are editable, because a rotating category changes every quarter and a rate that has run out is worse than no rate.
+- **What you owe, across every card.** Overview opens with the total owed on cards, what the other accounts hold, and how far ahead or behind that leaves you — each card listed with its last four. A card can be marked as one by hand, not only when a bank says so.
+- **Across the months.** Six months of spending, whole or one category at a time, with a line saying whether this month is above or below the last. Transfers stay out of it.
+- **Renews on its own.** Repeating charges found across every account, grouped by merchant however the bank spells it, and kept only when every gap between them looks monthly — so a shop visited often is not a subscription. Price rises and the same service billed to two cards are called out.
+- **A payoff reads as one event.** The two halves of a card payment name each other in Activity. Two possible matches are treated as none.
+- **Banks that need attention say so.** Each bank syncs on its own: one asking you to sign in again is named in Settings, and the others keep syncing. Two accounts for the same card can be merged, transactions and balances included.
 - Atomic JSON persistence in the app's Application Support directory. Corrupt or newer-format saves are preserved rather than overwritten.
 
 ## Try imports
