@@ -114,47 +114,6 @@ final class FinanceStore: ObservableObject {
         account.openingBalance + data.transactions.filter { $0.accountID == account.id }.reduce(0) { $0 + ($1.kind == .income ? $1.amount : -$1.amount) }
     }
 
-    /// What the cards owe and what the accounts hold, across every account at once.
-    ///
-    /// Six accounts make the one number a person actually wants — am I ahead or behind — the one
-    /// number nowhere on screen. `balance` runs negative on a card as it is spent, so what is owed
-    /// is that balance turned around; a card in credit owes nothing rather than owing a negative.
-    struct Standing {
-        var owed: Int = 0
-        var held: Int = 0
-        var cards: [(account: BankAccount, owed: Int, fromBank: Bool)] = []
-        /// Whether anything here is a running total of what has been seen rather than a balance.
-        var estimated: Bool = false
-        /// Whether any account actually holds money. A hand-kept account that starts at zero and
-        /// only ever records spending is not "what you have" — subtracting it from what is owed
-        /// produced the nonsense this replaces.
-        var holdings: Bool = false
-    }
-
-    var standing: Standing {
-        var result = Standing()
-        for account in data.accounts {
-            if account.isCreditCard == true {
-                // The bank's own figure when there is one. Adding up the transactions on hand
-                // cannot be the balance — the sync window starts somewhere, and everything before
-                // it is missing — so the fallback is marked as what it is rather than dressed up.
-                let owed = account.reportedBalance ?? max(0, -balance(account))
-                result.owed += owed
-                result.cards.append((account, owed, account.reportedBalance != nil))
-                if account.reportedBalance == nil { result.estimated = true }
-            } else if let reported = account.reportedBalance {
-                result.held += reported
-                result.holdings = true
-            } else if account.openingBalance != 0 {
-                // An account someone gave an opening balance to is being tracked on purpose.
-                result.held += balance(account)
-                result.holdings = true
-            }
-        }
-        result.cards.sort { $0.owed > $1.owed }
-        return result
-    }
-
     /// Spending by month, newest last, for the whole ledger or one category of it.
     ///
     /// Every other total in the app is one month wide, which answers "what did I spend" and never

@@ -721,46 +721,6 @@ final class FinanceTests: XCTestCase {
         XCTAssertFalse(ranked.contains(.other), "a category with only a transfer in it is not a trend")
     }
 
-    @MainActor func testWhatYouOweFollowsTheBankRatherThanTheHistoryOnHand() throws {
-        let url = temporaryURL()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let store = FinanceStore(fileURL: url, demo: false)
-        let cash = try XCTUnwrap(store.data.accounts.first)
-        var amex = BankAccount(name: "Amex", detail: "Gold")
-        amex.isCreditCard = true
-        amex.reportedBalance = 128_400          // what Amex itself says is owed
-        var discover = BankAccount(name: "Discover", detail: "It")
-        discover.isCreditCard = true            // nothing reported: only what has been seen
-        XCTAssertTrue(store.saveAccount(amex))
-        XCTAssertTrue(store.saveAccount(discover))
-        XCTAssertTrue(store.add([
-            Transaction(merchant: "FOOD LION", amount: 5_500, date: Date(), category: .groceries, accountID: amex.id),
-            Transaction(merchant: "DON DON", amount: 1_298, date: Date(), category: .food, accountID: discover.id),
-            // A hand-kept account that starts at zero and only records spending holds nothing.
-            Transaction(merchant: "FOOD LION", amount: 2_200, date: Date(), category: .groceries, accountID: cash.id),
-        ]))
-
-        let standing = store.standing
-        XCTAssertEqual(standing.cards.first { $0.account.id == amex.id }?.owed, 128_400,
-                       "the bank's own balance wins over adding up the rows on hand")
-        XCTAssertTrue(standing.cards.first { $0.account.id == amex.id }?.fromBank == true)
-        XCTAssertEqual(standing.cards.first { $0.account.id == discover.id }?.owed, 1_298,
-                       "a card the bank says nothing about falls back to what has been seen")
-        XCTAssertTrue(standing.estimated, "and that fallback is admitted, not presented as a balance")
-        XCTAssertEqual(standing.owed, 129_698)
-
-        // The bug this replaces: Cash started at zero, went negative on two expenses, and was
-        // subtracted from what was owed to announce how far "short" the user was.
-        XCTAssertEqual(standing.held, 0)
-        XCTAssertFalse(standing.holdings, "an account that never held anything is not holdings")
-
-        var checking = BankAccount(name: "PNC", detail: "Checking")
-        checking.reportedBalance = 240_000
-        XCTAssertTrue(store.saveAccount(checking))
-        XCTAssertEqual(store.standing.held, 240_000, "a real balance counts")
-        XCTAssertTrue(store.standing.holdings)
-    }
-
     @MainActor func testMergingTwoAccountsMovesEverythingAndLosesNothing() throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

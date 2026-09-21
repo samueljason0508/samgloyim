@@ -25,7 +25,6 @@ struct OverviewView: View {
                     Image(systemName: "leaf").font(.system(size: 37, weight: .ultraLight)).rotationEffect(.degrees(-25)).foregroundStyle(Palette.forest).padding(.bottom, 9).padding(.trailing, 8)
                 }
                 VStack(spacing: 12) { MonthSelector(); AccountFilter() }
-                standingCard
                 spendingCard
                 // Location is only ever asked for on a tap, so this is safe to show everywhere.
                 BestCardHere()
@@ -73,58 +72,6 @@ struct OverviewView: View {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 17)).frame(width: 42, height: 42).background(.white, in: Circle()).overlay(Circle().stroke(Palette.line))
             }.accessibilityLabel("Settings")
         }.padding(.top, 9)
-    }
-
-    /// What is owed across every card, and what is held against it when anything actually is.
-    ///
-    /// The monthly total below answers "how much did I spend". With several cards the question
-    /// that comes first is "what do I owe", and nothing answered it.
-    ///
-    /// An earlier version subtracted a hand-kept account that starts at zero from what is owed and
-    /// called the result how far short you were, which was neither true nor useful. Held is now
-    /// shown only where money is genuinely tracked, and a total added up from synced history says
-    /// so instead of posing as a balance.
-    @ViewBuilder private var standingCard: some View {
-        let standing = store.standing
-        if !standing.cards.isEmpty {
-            VStack(alignment: .leading, spacing: 13) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("OWED ON CARDS").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.4).foregroundStyle(Palette.muted)
-                    HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Text(Money.format(standing.owed)).font(.system(size: 29, weight: .regular, design: .serif))
-                            .accessibilityIdentifier("total-owed")
-                        if standing.holdings {
-                            Text("· \(Money.format(standing.held)) held").font(.system(size: 11)).foregroundStyle(Palette.muted)
-                        }
-                    }
-                    if standing.estimated {
-                        Text("Added up from the transactions here, so anything older than your sync isn’t counted.")
-                            .font(.system(size: 10)).foregroundStyle(Palette.muted).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                let carrying = standing.cards.filter { $0.owed > 0 }
-                if !carrying.isEmpty {
-                    VStack(spacing: 8) {
-                        ForEach(carrying, id: \.account.id) { card in
-                            HStack(spacing: 8) {
-                                Image(systemName: "creditcard.fill").font(.system(size: 10)).foregroundStyle(Palette.muted)
-                                Text(card.account.name).font(.system(size: 12)).lineLimit(1)
-                                if let mask = card.account.mask {
-                                    Text("•• \(mask)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
-                                }
-                                Spacer(minLength: 6)
-                                // A figure the bank stands behind and one this app assembled are
-                                // not the same claim, and the difference matters most here.
-                                if !card.fromBank {
-                                    Text("tracked").font(.system(size: 9)).foregroundStyle(Palette.muted)
-                                }
-                                Text(Money.format(card.owed)).font(.system(size: 12, weight: .medium)).monospacedDigit()
-                            }
-                        }
-                    }
-                }
-            }.pocketCard(padding: 16)
-        }
     }
 
     private var spendingCard: some View {
