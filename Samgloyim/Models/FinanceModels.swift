@@ -284,6 +284,11 @@ struct BankAccount: Identifiable, Codable, Equatable {
     /// Optional, not a defaulted array: a non-optional property fails to decode from a save written
     /// before it existed, however sensible its default looks.
     var rewards: [RewardRate]?
+    /// What the bank last said this account stands at — on a card, what is owed. Adding up the
+    /// transactions on hand cannot produce this: the sync window starts somewhere, and everything
+    /// charged or paid before it is missing. Nil for anything no bank reports on.
+    var reportedBalance: Int?
+    var creditLimit: Int?
     /// The bank this account mirrors. Nil means it is kept by hand — cash, or anything not synced.
     /// A sync files each institution into its own account, so this is how one is found again.
     var institution: String?

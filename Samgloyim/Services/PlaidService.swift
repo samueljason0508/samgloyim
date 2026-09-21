@@ -35,6 +35,10 @@ struct PlaidAccountPayload: Decodable {
     var subtype: String?
     var isCreditCard: Bool
     var institution: String
+    /// What the bank says the account stands at, in cents; on a card, what is owed. Absent from
+    /// backends older than this, so never assumed.
+    var balanceCents: Int?
+    var limitCents: Int?
 
     /// The product name to look rates up by, falling back to the display name when the bank has no
     /// official one, and to nothing at all when neither says anything useful.

@@ -122,20 +122,33 @@ final class FinanceStore: ObservableObject {
     struct Standing {
         var owed: Int = 0
         var held: Int = 0
-        var cards: [(account: BankAccount, owed: Int)] = []
-        var net: Int { held - owed }
+        var cards: [(account: BankAccount, owed: Int, fromBank: Bool)] = []
+        /// Whether anything here is a running total of what has been seen rather than a balance.
+        var estimated: Bool = false
+        /// Whether any account actually holds money. A hand-kept account that starts at zero and
+        /// only ever records spending is not "what you have" — subtracting it from what is owed
+        /// produced the nonsense this replaces.
+        var holdings: Bool = false
     }
 
     var standing: Standing {
         var result = Standing()
         for account in data.accounts {
-            let balance = balance(account)
             if account.isCreditCard == true {
-                let owed = max(0, -balance)
+                // The bank's own figure when there is one. Adding up the transactions on hand
+                // cannot be the balance — the sync window starts somewhere, and everything before
+                // it is missing — so the fallback is marked as what it is rather than dressed up.
+                let owed = account.reportedBalance ?? max(0, -balance(account))
                 result.owed += owed
-                result.cards.append((account, owed))
-            } else {
-                result.held += balance
+                result.cards.append((account, owed, account.reportedBalance != nil))
+                if account.reportedBalance == nil { result.estimated = true }
+            } else if let reported = account.reportedBalance {
+                result.held += reported
+                result.holdings = true
+            } else if account.openingBalance != 0 {
+                // An account someone gave an opening balance to is being tracked on purpose.
+                result.held += balance(account)
+                result.holdings = true
             }
         }
         result.cards.sort { $0.owed > $1.owed }
@@ -324,6 +337,30 @@ final class FinanceStore: ObservableObject {
                     data.accounts[index].mask = payload.mask
                     data.accounts[index].isCreditCard = payload.isCreditCard
                     if payload.isCreditCard { data.accounts[index].symbol = "creditcard.fill" }
+                    changed = true
+                }
+            }
+            // Balances are taken after the descriptions, in one pass per institution: a bank that
+            // reports two cards folds into one account here, and what is owed is the two added up
+            // rather than whichever arrived last.
+            // ponytail: an institution reporting both a card and a chequing account collapses into
+            // one account, so only the matching half is counted. Per-account rows would fix it.
+            let byInstitution = Dictionary(grouping: sync.accounts, by: \.institution)
+            for (institution, payloads) in byInstitution {
+                let index = data.accounts.firstIndex { $0.id == Self.accountID(forInstitution: institution, in: &data) }
+                guard let index else { continue }
+                let wanted = payloads.filter { $0.isCreditCard == (data.accounts[index].isCreditCard == true) }
+                let reported = wanted.compactMap(\.balanceCents)
+                guard !reported.isEmpty else { continue }
+                let total = reported.reduce(0, +)
+                let limits = wanted.compactMap(\.limitCents)
+                if data.accounts[index].reportedBalance != total {
+                    data.accounts[index].reportedBalance = total
+                    changed = true
+                }
+                let limit = limits.isEmpty ? nil : limits.reduce(0, +)
+                if data.accounts[index].creditLimit != limit {
+                    data.accounts[index].creditLimit = limit
                     changed = true
                 }
             }

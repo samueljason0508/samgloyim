@@ -114,6 +114,11 @@ function normalize(t, institutionName) {
 
 // A credit card's official_name ("American Express® Gold Card") is what identifies the product,
 // and so what its earn rates can be looked up against. transactionsSync already returns it.
+// Money is counted in cents everywhere in this app; Plaid reports dollars as a float.
+function cents(amount) {
+  return typeof amount === 'number' ? Math.round(amount * 100) : null;
+}
+
 function normalizeAccount(a, institutionName) {
   return {
     accountId: a.account_id,
@@ -123,6 +128,12 @@ function normalizeAccount(a, institutionName) {
     subtype: a.subtype || null,
     isCreditCard: a.type === 'credit',
     institution: institutionName,
+    // What the bank itself says the account stands at. Without it the app can only add up the
+    // transactions it has been given, which starts at whatever the sync window reached and so
+    // misses every payment and every charge before that — a number that is never the balance.
+    // On a credit card Plaid reports what is owed as a positive figure.
+    balanceCents: cents(a.balances?.current),
+    limitCents: cents(a.balances?.limit),
   };
 }
 
@@ -331,6 +342,23 @@ async function syncOneItem(item) {
     cursor = resp.data.next_cursor;
     hasMore = resp.data.has_more;
   }
+  // transactionsSync only describes the accounts the returned transactions belong to, so a card
+  // with a quiet month reports nothing — and its balance in the app would stay at whatever it was
+  // months ago. Asking outright costs one call and covers every account this item holds. It is the
+  // same 'transactions' enrolment: no new product, and still nothing that can move money.
+  try {
+    const held = await client.accountsGet({ access_token: item.accessToken });
+    for (const account of held.data.accounts.map((a) => normalizeAccount(a, item.institutionName))) {
+      const index = accounts.findIndex((existing) => existing.accountId === account.accountId);
+      if (index === -1) accounts.push(account);
+      else accounts[index] = account;
+    }
+  } catch (err) {
+    // A balance that could not be fetched is not a failed sync: the transactions are already in
+    // hand, and the app falls back to adding them up.
+    console.error(`balances unavailable for ${item.institutionName}:`, err.response?.data?.error_code || err.message);
+  }
+
   return { accounts, added, modified, removed, cursor };
 }
 
