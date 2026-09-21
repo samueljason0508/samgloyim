@@ -611,8 +611,8 @@ final class FinanceTests: XCTestCase {
         var refused = "", missing = ""
         XCTAssertThrowsError(try PlaidService.validate(response(401))) { refused = ($0 as? ImportError)?.errorDescription ?? "" }
         XCTAssertThrowsError(try PlaidService.validate(response(500))) { missing = ($0 as? ImportError)?.errorDescription ?? "" }
-        XCTAssertTrue(refused.contains("access token"), "A 401 should name the token: \(refused)")
-        XCTAssertFalse(missing.contains("access token"), "A 500 is not a token problem: \(missing)")
+        XCTAssertTrue(refused.contains("Sign in"), "A 401 should send the user to signing in: \(refused)")
+        XCTAssertFalse(missing.contains("Sign in"), "A 500 is not a sign-in problem: \(missing)")
     }
 
     @MainActor func testACardPayoffFindsItsOtherHalf() throws {

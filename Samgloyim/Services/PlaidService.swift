@@ -167,8 +167,8 @@ enum PlaidService {
             guard health.ok else { return "Answered, but reported a problem." }
             guard health.authorized == true else {
                 return BackendCredential.token == nil
-                    ? "Reachable, but no access token set. It is printed when the backend starts."
-                    : "Reachable, but it rejected this access token."
+                    ? "Reachable. Enter a name and password to sign in."
+                    : "Reachable, but it no longer accepts this sign-in."
             }
             return "Reachable — Plaid \(health.env ?? "?")"
         } catch let error as ImportError {
@@ -252,9 +252,12 @@ enum PlaidService {
         // A rejected token and an absent server both look like "sync failed", and the fixes are
         // nothing alike — so say which one it is.
         if http.statusCode == 401 {
+            // Signing in is how a token gets here now, so "the token is printed when the backend
+            // starts" sent people to a terminal they may not have. Never signed in and no longer
+            // accepted are different problems with the same remedy in different places.
             throw ImportError.message(BackendCredential.token == nil
-                ? "The backend needs its access token. It is printed when the backend starts; add it under Import › Sync server."
-                : "The backend rejected this access token. Check it under Import › Sync server.")
+                ? "You’re not signed in to the sync server. Sign in under Import › Sync server."
+                : "The sync server no longer accepts this sign-in. Sign in again under Import › Sync server.")
         }
         guard (200..<300).contains(http.statusCode) else {
             throw ImportError.message("Couldn’t reach the backend. Make sure it’s running, and that the address under Import › Sync server is right.")

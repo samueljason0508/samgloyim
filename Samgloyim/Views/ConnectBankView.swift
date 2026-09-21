@@ -64,7 +64,12 @@ struct ConnectBankView: View {
             ))
             phase = .ready
         } catch {
-            phase = .error("Couldn’t start Plaid Link. Make sure the local backend is running (npm start in backend/), then try again.")
+            // This used to say "run npm start", which stopped being the answer the day the backend
+            // could live on a host, and it hid the two failures that actually happen: an address
+            // pointing at nothing, and a device that has never signed in. Those need opposite
+            // fixes, and the backend already words them — so say what went wrong.
+            phase = .error((error as? ImportError)?.errorDescription
+                ?? "Couldn’t reach \(PlaidService.baseURL.absoluteString). Check the address under Import › Sync server.")
         }
     }
 
