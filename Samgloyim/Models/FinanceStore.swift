@@ -142,6 +142,57 @@ final class FinanceStore: ObservableObject {
         return result
     }
 
+    /// Spending by month, newest last, for the whole ledger or one category of it.
+    ///
+    /// Every other total in the app is one month wide, which answers "what did I spend" and never
+    /// "is this getting worse". Transfers are excluded the way `expenses` excludes them: a card
+    /// payoff is not eating out twice.
+    func monthlyTotals(category: SpendingCategory? = nil, accountID: UUID? = nil, months: Int = 6, now: Date = Date()) -> [(month: Date, amount: Int)] {
+        let calendar = Calendar.current
+        let thisMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
+        return (0..<max(1, months)).reversed().compactMap { back in
+            guard let month = calendar.date(byAdding: .month, value: -back, to: thisMonth) else { return nil }
+            let total = transactions(in: month, accountID: accountID)
+                .filter { $0.kind == .expense && $0.isTransfer != true && (category == nil || $0.category == category) }
+                .reduce(0) { $0 + $1.amount }
+            return (month, total)
+        }
+    }
+
+    /// The categories worth charting: the ones with the most spend over the window, not the ones
+    /// that happen to be busy this month.
+    func trendingCategories(months: Int = 6, now: Date = Date(), limit: Int = 6) -> [SpendingCategory] {
+        SpendingCategory.allCases
+            .map { ($0, monthlyTotals(category: $0, months: months, now: now).reduce(0) { $0 + $1.amount }) }
+            .filter { $0.1 > 0 }
+            .sorted { $0.1 > $1.1 }
+            .prefix(limit)
+            .map(\.0)
+    }
+
+    /// The other half of a card payoff: the account the money left, or the card it landed on.
+    ///
+    /// A payoff arrives as two rows from two banks that have never heard of each other — money out
+    /// of chequing, money onto the card — and both are already kept out of spending. Read alone
+    /// each is a mystery row. The pairing is worked out when it is needed rather than stored:
+    /// nothing to migrate, and a sync that corrects an amount re-pairs it for free.
+    ///
+    /// Two candidates are treated as none, the same rule receipt matching uses: a wrong pair
+    /// claimed confidently is worse than no pair at all.
+    func payoffPair(for transaction: Transaction, within days: Int = 3) -> Transaction? {
+        guard transaction.isTransfer == true else { return nil }
+        let calendar = Calendar.current
+        let matches = data.transactions.filter { other in
+            other.id != transaction.id
+                && other.isTransfer == true
+                && other.amount == transaction.amount
+                && other.kind != transaction.kind
+                && other.accountID != transaction.accountID
+                && abs(calendar.dateComponents([.day], from: other.date, to: transaction.date).day ?? .max) <= days
+        }
+        return matches.count == 1 ? matches.first : nil
+    }
+
     @discardableResult
     private func update(_ mutation: (inout FinanceData) -> Void) -> Bool {
         guard canWrite else {

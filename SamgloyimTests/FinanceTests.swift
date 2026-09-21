@@ -615,6 +615,112 @@ final class FinanceTests: XCTestCase {
         XCTAssertFalse(missing.contains("access token"), "A 500 is not a token problem: \(missing)")
     }
 
+    @MainActor func testACardPayoffFindsItsOtherHalf() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let checking = try XCTUnwrap(store.data.accounts.first)
+        let amex = BankAccount(name: "Amex", detail: "Gold")
+        let discover = BankAccount(name: "Discover", detail: "It")
+        XCTAssertTrue(store.saveAccount(amex))
+        XCTAssertTrue(store.saveAccount(discover))
+        let day = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 10)))
+        let twoDaysLater = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: 2, to: day))
+
+        func transfer(_ merchant: String, _ amount: Int, _ date: Date, _ account: UUID, _ kind: TransactionKind) -> Transaction {
+            var row = Transaction(merchant: merchant, amount: amount, date: date, category: .other, accountID: account, kind: kind)
+            row.isTransfer = true
+            return row
+        }
+        let out = transfer("AMEX PAYMENT", 41_200, day, checking.id, .expense)
+        let onto = transfer("PAYMENT THANK YOU", 41_200, twoDaysLater, amex.id, .income)
+        var groceries = Transaction(merchant: "FOOD LION", amount: 41_200, date: day, category: .groceries, accountID: discover.id)
+        groceries.isTransfer = false
+        XCTAssertTrue(store.add([out, onto, groceries]))
+
+        XCTAssertEqual(store.payoffPair(for: out)?.id, onto.id, "the two halves of one payoff find each other")
+        XCTAssertEqual(store.payoffPair(for: onto)?.id, out.id, "from either side")
+        XCTAssertNil(store.payoffPair(for: groceries), "ordinary spending is never half of a payoff")
+
+        // A second candidate for the same amount makes both guesses unsafe, so neither is offered.
+        let decoy = transfer("TRANSFER", 41_200, day, discover.id, .income)
+        XCTAssertTrue(store.add([decoy]))
+        XCTAssertNil(store.payoffPair(for: out), "two equally good matches are treated as no match")
+    }
+
+    func testRecurringChargesAreFoundAndOddOnesAreLeftAlone() throws {
+        let calendar = Calendar.current
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 6, day: 3)))
+        let amex = UUID(), discover = UUID()
+        func charge(_ merchant: String, _ amount: Int, monthsOn: Int, account: UUID = UUID(), days: Int = 0) -> Transaction {
+            let date = calendar.date(byAdding: .day, value: days, to: calendar.date(byAdding: .month, value: monthsOn, to: start)!)!
+            return Transaction(merchant: merchant, amount: amount, date: date, category: .subscriptions, accountID: account)
+        }
+
+        var rows: [Transaction] = []
+        // A monthly subscription that put its price up on the latest charge.
+        rows += [charge("SPOTIFY USA", 1_099, monthsOn: 0, account: amex),
+                 charge("Spotify USA*", 1_099, monthsOn: 1, account: amex),
+                 charge("SPOTIFY USA", 1_299, monthsOn: 2, account: amex)]
+        // The same service running on two cards — two subscriptions nobody meant to have.
+        rows += [charge("NETFLIX", 1_599, monthsOn: 0, account: amex),
+                 charge("NETFLIX", 1_599, monthsOn: 1, account: discover),
+                 charge("NETFLIX", 1_599, monthsOn: 2, account: amex)]
+        // A coffee shop visited often is not a subscription.
+        rows += (0..<6).map { charge("CAMPUS CAFE", 500, monthsOn: 0, account: amex, days: $0 * 5) }
+        // Twice a month is not monthly, and must not be annualized as if it were.
+        rows += [charge("GYM", 2_000, monthsOn: 0, account: amex),
+                 charge("GYM", 2_000, monthsOn: 0, account: amex, days: 14),
+                 charge("GYM", 2_000, monthsOn: 1, account: amex)]
+        // Two charges are a coincidence, not a pattern.
+        rows += [charge("ICLOUD", 299, monthsOn: 0, account: amex), charge("ICLOUD", 299, monthsOn: 1, account: amex)]
+
+        let found = Recurring.detect(rows)
+        XCTAssertEqual(found.map(\.merchant).sorted(), ["NETFLIX", "SPOTIFY USA"])
+        XCTAssertEqual(found.first?.merchant, "NETFLIX", "the costliest over a year is named first")
+
+        let spotify = try XCTUnwrap(found.first { $0.merchant == "SPOTIFY USA" })
+        XCTAssertEqual(spotify.occurrences, 3, "a renamed charge is the same subscription")
+        XCTAssertEqual(spotify.increase, 200, "a price rise is called out")
+        XCTAssertEqual(spotify.yearly, 15_588, "at the price it charges now, not the one it used to")
+        XCTAssertFalse(spotify.onSeveralAccounts)
+
+        let netflix = try XCTUnwrap(found.first { $0.merchant == "NETFLIX" })
+        XCTAssertTrue(netflix.onSeveralAccounts, "the same service on two cards is worth knowing about")
+        XCTAssertNil(netflix.increase, "a steady price is not a rise")
+    }
+
+    @MainActor func testMonthlyTrendsReadAcrossMonthsAndIgnoreTransfers() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let account = try XCTUnwrap(store.data.accounts.first)
+        let calendar = Calendar.current
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 15)))
+        let lastMonth = try XCTUnwrap(calendar.date(byAdding: .month, value: -1, to: now))
+        var payoff = Transaction(merchant: "AMEX PAYMENT", amount: 40_000, date: now, category: .other, accountID: account.id)
+        payoff.isTransfer = true
+        XCTAssertTrue(store.add([
+            Transaction(merchant: "DON DON", amount: 1_298, date: now, category: .food, accountID: account.id),
+            Transaction(merchant: "FOOD LION", amount: 5_500, date: now, category: .groceries, accountID: account.id),
+            Transaction(merchant: "CAMPUS CAFE", amount: 2_000, date: lastMonth, category: .food, accountID: account.id),
+            payoff,
+        ]))
+
+        let food = store.monthlyTotals(category: .food, months: 3, now: now)
+        XCTAssertEqual(food.count, 3, "the window is as wide as asked for, gaps included")
+        XCTAssertEqual(food.last?.amount, 1_298, "this month")
+        XCTAssertEqual(food[food.count - 2].amount, 2_000, "and the month before it")
+        XCTAssertEqual(food.first?.amount, 0, "a month with nothing in it still appears, at zero")
+
+        let everything = store.monthlyTotals(months: 3, now: now)
+        XCTAssertEqual(everything.last?.amount, 6_798, "moving money between your own accounts is not spending")
+
+        let ranked = store.trendingCategories(months: 3, now: now)
+        XCTAssertEqual(ranked.first, .groceries, "the biggest spend over the window leads")
+        XCTAssertFalse(ranked.contains(.other), "a category with only a transfer in it is not a trend")
+    }
+
     @MainActor func testWhatYouOweAddsUpAcrossEveryCard() throws {
         let url = temporaryURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

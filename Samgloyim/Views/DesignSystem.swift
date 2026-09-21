@@ -159,8 +159,7 @@ struct TransactionRow: View {
                             .accessibilityLabel("Receipt attached")
                     }
                 }
-                Text("\(transaction.kind == .income ? "Income" : transaction.category.rawValue) · \(store.account(transaction.accountID)?.name ?? "Account")")
-                    .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
+                Text(subtitle).font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 5) {
@@ -172,6 +171,16 @@ struct TransactionRow: View {
                     .font(.system(size: 10)).foregroundStyle(Palette.muted).lineLimit(1)
             }
         }.padding(.vertical, 7).contentShape(Rectangle())
+    }
+
+    /// A payoff arrives as two rows from two banks that have never heard of each other. Naming
+    /// the other side turns "TRANSFER $412" into something a person can read at a glance.
+    private var subtitle: String {
+        let account = store.account(transaction.accountID)?.name ?? "Account"
+        if let other = store.payoffPair(for: transaction), let paired = store.account(other.accountID)?.name {
+            return transaction.kind == .income ? "\(account) ← paid from \(paired)" : "\(account) → paid \(paired)"
+        }
+        return "\(transaction.kind == .income ? "Income" : transaction.category.rawValue) · \(account)"
     }
 }
 

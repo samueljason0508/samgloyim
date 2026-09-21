@@ -6,6 +6,9 @@ enum FlowMode: String, CaseIterable { case flow = "Flow", accounts = "Account" }
 struct InsightsView: View {
     @EnvironmentObject var store: FinanceStore
     @State private var flowMode = FlowMode.flow
+    /// Nil means everything. A trend is only readable against something: one category over six
+    /// months, or the whole month-by-month shape.
+    @State private var trendCategory: SpendingCategory?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 23) {
@@ -39,6 +42,8 @@ struct InsightsView: View {
                         breakdown(of: accountGroups)
                     }
                 }.pocketCard(padding: 18)
+                trendCard
+                subscriptionCard
                 VStack(alignment: .leading, spacing: 16) {
                     SectionHeading(title: "By category", detail: "Tap to explore")
                     ForEach(store.categoryTotals, id: \.category) { item in
@@ -62,6 +67,114 @@ struct InsightsView: View {
             }.padding(.horizontal, 22).padding(.bottom, 30)
         }.pageBackground().toolbar(.hidden, for: .navigationBar)
     }
+    /// What renews whether you look or not.
+    ///
+    /// Read across the whole ledger rather than the selected month: a subscription never appears
+    /// twice on one statement, which is exactly why it is easy to keep paying for.
+    @ViewBuilder private var subscriptionCard: some View {
+        let found = Recurring.detect(store.data.transactions)
+        if !found.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                SectionHeading(title: "Renews on its own")
+                Text("\(Money.format(found.reduce(0) { $0 + $1.yearly }, decimals: false)) a year at today’s prices")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    .accessibilityIdentifier("subscriptions-yearly")
+                VStack(spacing: 0) {
+                    ForEach(Array(found.enumerated()), id: \.element.id) { index, item in
+                        HStack(spacing: 11) {
+                            Image(systemName: item.category.symbol).font(.system(size: 12)).frame(width: 26).foregroundStyle(Palette.forest)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.merchant).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(subscriptionNote(item)).font(.system(size: 10)).foregroundStyle(noteColor(item))
+                            }
+                            Spacer(minLength: 6)
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text(Money.format(item.latest)).font(.system(size: 13, weight: .medium))
+                                Text("\(Money.format(item.yearly, decimals: false))/yr").font(.system(size: 9)).foregroundStyle(Palette.muted)
+                            }
+                        }.padding(.vertical, 10)
+                        if index < found.count - 1 { Divider().overlay(Palette.line).padding(.leading, 37) }
+                    }
+                }
+            }.pocketCard(padding: 18)
+        }
+    }
+
+    /// The most useful thing known about this charge, and only one of them: a row that says three
+    /// things says none of them.
+    private func subscriptionNote(_ item: Subscription) -> String {
+        if item.onSeveralAccounts {
+            let names = item.accountIDs.compactMap { store.account($0)?.name }.sorted()
+            return "Billed to \(names.joined(separator: " and "))"
+        }
+        if let increase = item.increase { return "Up \(Money.format(increase)) on the last charge" }
+        let account = item.accountIDs.first.flatMap { store.account($0)?.name }
+        return "\(item.occurrences) charges · \(account ?? "one account")"
+    }
+
+    private func noteColor(_ item: Subscription) -> Color {
+        item.onSeveralAccounts || item.increase != nil ? Palette.orange : Palette.muted
+    }
+
+    /// Six months of spending, because a habit is invisible inside a single month.
+    ///
+    /// Filters above change the month and the account; this deliberately ignores the month —
+    /// looking across months is the whole point — while still respecting the account filter, so
+    /// one card can be read on its own.
+    @ViewBuilder private var trendCard: some View {
+        let totals = store.monthlyTotals(category: trendCategory, accountID: store.selectedAccountID, months: 6)
+        let highest = totals.map(\.amount).max() ?? 0
+        if highest > 0 {
+            VStack(alignment: .leading, spacing: 14) {
+                SectionHeading(title: "Across the months")
+                Text(trendSubtitle(totals)).font(.system(size: 11)).foregroundStyle(Palette.muted)
+                Chart {
+                    ForEach(totals, id: \.month) { point in
+                        BarMark(
+                            x: .value("Month", point.month, unit: .month),
+                            y: .value("Spent", Double(point.amount) / 100)
+                        )
+                        .foregroundStyle(Palette.forest.opacity(point.month == totals.last?.month ? 1 : 0.45))
+                        .cornerRadius(5)
+                    }
+                }
+                .chartYAxis { AxisMarks(position: .leading) }
+                .chartXAxis { AxisMarks(values: .stride(by: .month)) { AxisValueLabel(format: .dateTime.month(.narrow)) } }
+                .frame(height: 135)
+                .accessibilityIdentifier("trend-chart")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        trendChip(nil, label: "All")
+                        ForEach(store.trendingCategories(months: 6), id: \.self) { category in
+                            trendChip(category, label: category.rawValue)
+                        }
+                    }
+                }
+            }.pocketCard(padding: 18)
+        }
+    }
+
+    private func trendChip(_ category: SpendingCategory?, label: String) -> some View {
+        Button { trendCategory = category } label: {
+            Text(label).font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(trendCategory == category ? Palette.forest : Palette.line, in: Capsule())
+                .foregroundStyle(trendCategory == category ? .white : Palette.muted)
+        }.buttonStyle(.plain).accessibilityIdentifier("trend-\(label)")
+    }
+
+    /// The sentence a chart cannot say: whether this month is better or worse than the last one.
+    private func trendSubtitle(_ totals: [(month: Date, amount: Int)]) -> String {
+        let name = trendCategory?.rawValue ?? "Everything"
+        guard totals.count >= 2, let current = totals.last?.amount else { return name }
+        let previous = totals[totals.count - 2].amount
+        guard previous > 0 else { return "\(name) · nothing to compare last month against" }
+        let difference = current - previous
+        if difference == 0 { return "\(name) · exactly level with last month" }
+        let direction = difference > 0 ? "more" : "less"
+        return "\(name) · \(Money.format(abs(difference), decimals: false)) \(direction) than last month"
+    }
+
     private var flowSubtitle: String {
         flowMode == .flow ? "From each account to the things in your life." : "What each account carried this month."
     }
