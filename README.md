@@ -1,4 +1,4 @@
-# samgloyim
+# StreetHacks
 
 A native, local-first iPhone finance app built from the supplied finance concept. SwiftUI, Swift Charts, Apple Vision, and PhotosUI. No packages, API keys, backend, or sign-in required.
 
