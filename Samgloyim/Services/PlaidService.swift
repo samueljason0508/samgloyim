@@ -106,6 +106,25 @@ enum PlaidService {
         return request
     }
 
+    /// Trades a name and password for the backend's access token, which is what every other
+    /// request carries. The password is never stored — only what it buys.
+    static func logIn(username: String, password: String) async throws -> String {
+        struct Reply: Decodable { var token: String }
+        struct Complaint: Decodable { var error: String? }
+        var request = request("login", method: "POST", token: nil)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["username": username, "password": password])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        // The backend already words these for a person — a refused password and a throttled
+        // address need different patience, and only it knows which happened.
+        guard (200..<300).contains(code) else {
+            let said = (try? JSONDecoder().decode(Complaint.self, from: data))?.error
+            throw ImportError.message(said ?? "Couldn’t sign in to the backend at \(baseURL.absoluteString).")
+        }
+        return try JSONDecoder().decode(Reply.self, from: data).token
+    }
+
     /// Whether the backend answers, and whether it accepts us, said in a sentence the user
     /// can act on. Reachable-but-refused and not-there-at-all need different fixes.
     static func check() async -> String {

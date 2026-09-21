@@ -8,13 +8,14 @@ import SwiftUI
 struct BackendAddressCard: View {
     @AppStorage(PlaidService.addressKey) private var address = ""
     @State private var editing = false
-    @State private var token = ""
+    @State private var username = ""
+    @State private var password = ""
     @State private var status: String?
     @State private var checking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button { if editing { save() }; withAnimation(.easeInOut(duration: 0.2)) { editing.toggle() } } label: {
+            Button { withAnimation(.easeInOut(duration: 0.2)) { editing.toggle() } } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "externaldrive.connected.to.line.below").font(.system(size: 11))
                     VStack(alignment: .leading, spacing: 3) {
@@ -36,30 +37,36 @@ struct BackendAddressCard: View {
                     .padding(.horizontal, 11).padding(.vertical, 9)
                     .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
                     .accessibilityIdentifier("backend-address-field")
-                // The token is not shown back: it is stored in the keychain, and a field that
-                // reprints a secret on screen has no reason to.
+                // A name and a password, not the token itself: the token is a long string
+                // nobody can type from memory, and signing in is how the backend hands it over.
+                // Neither name nor password is kept — only what they buy, in the keychain.
                 HStack(spacing: 8) {
-                    SecureField(BackendCredential.token == nil ? "Access token" : "Stored — type to replace", text: $token)
-                        .font(.system(size: 12, design: .monospaced))
+                    TextField("Name", text: $username)
+                        .font(.system(size: 12))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .padding(.horizontal, 11).padding(.vertical, 9)
                         .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-                        .accessibilityIdentifier("backend-token-field")
+                        .accessibilityIdentifier("backend-username-field")
+                    SecureField("Password", text: $password)
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 11).padding(.vertical, 9)
+                        .background(Palette.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityIdentifier("backend-password-field")
                     if BackendCredential.token != nil {
                         Image(systemName: "checkmark.shield.fill").font(.system(size: 13)).foregroundStyle(Palette.forest)
-                            .accessibilityLabel("A token is stored")
+                            .accessibilityLabel("Signed in")
                     }
                 }
                 HStack(spacing: 10) {
                     Button { Task { await check() } } label: {
-                        Text(checking ? "Checking…" : "Check").font(.system(size: 11, weight: .semibold))
+                        Text(checking ? "Checking…" : (password.isEmpty ? "Check" : "Sign in")).font(.system(size: 11, weight: .semibold))
                     }.disabled(checking).accessibilityIdentifier("backend-check")
                     if !address.isEmpty {
                         Button("Use localhost") { address = ""; status = nil }.font(.system(size: 11))
                     }
                     if BackendCredential.token != nil {
-                        Button("Forget token") { BackendCredential.store(""); token = ""; status = nil }
+                        Button("Sign out") { BackendCredential.store(""); password = ""; status = nil }
                             .font(.system(size: 11)).foregroundStyle(Palette.orange)
                     }
                 }
@@ -74,22 +81,29 @@ struct BackendAddressCard: View {
     }
 
     private func check() async {
-        save()
         checking = true
         defer { checking = false }
+        if !password.isEmpty {
+            guard await signIn() else { return }
+        }
         status = await PlaidService.check()
     }
 
-    /// A token typed but never checked is still a token the user meant to set.
-    ///
-    /// A keychain that refuses the write leaves the app looking like the backend rejected it,
-    /// which sends the user off fixing the wrong thing — so say which one happened.
-    private func save() {
-        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if BackendCredential.store(token) {
-            token = ""
-        } else {
-            status = "Couldn’t save the token to this device’s keychain, so it wasn’t kept."
+    /// Signing in is the only way a token gets here, so a failure to keep it is worth the
+    /// same breath as a refused password: both leave the app unable to sync, for different
+    /// reasons and with different fixes.
+    private func signIn() async -> Bool {
+        do {
+            let token = try await PlaidService.logIn(username: username, password: password)
+            guard BackendCredential.store(token) else {
+                status = "Signed in, but this device’s keychain wouldn’t keep the token."
+                return false
+            }
+            password = ""
+            return true
+        } catch {
+            status = (error as? ImportError)?.errorDescription ?? "Couldn’t sign in."
+            return false
         }
     }
 }

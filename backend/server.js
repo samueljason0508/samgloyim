@@ -159,6 +159,51 @@ if (KV_ENABLED && !(process.env.BACKEND_ACCESS_TOKEN || '').trim()) {
   process.exit(1);
 }
 
+// --- Who is allowed to ask for the token ---------------------------------------
+// The access token alone is fine for one phone, but it is a long string nobody can type from
+// memory and there is no way to let one person in without handing them the same secret the
+// other one has. So a name and a password buy that token, and BACKEND_USERS holds
+// name:salt:scryptHash entries — never a password, so the env and the logs cannot leak one.
+//   node -e "const c=require('crypto'),s=c.randomBytes(16).toString('hex');console.log(`NAME:${s}:${c.scryptSync(process.argv[1],s,32).toString('hex')}`)" 'the password'
+const USERS = new Map(
+  (process.env.BACKEND_USERS || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [name, salt, hash] = entry.split(':');
+      return [String(name).toLowerCase(), { salt, hash }];
+    })
+    .filter(([name, r]) => name && r.salt && r.hash),
+);
+
+// Five characters of password is guessable in an afternoon if a stranger may guess without
+// limit, and this is on the open internet. Attempts are counted per address and the window
+// only clears with time, so a wrong password costs whoever sent it.
+const attempts = new Map(); // ponytail: in-memory, per-process; a real store if this ever runs on more than one instance
+const MAX_ATTEMPTS = 8;
+const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+
+function tooManyAttempts(ip) {
+  const seen = attempts.get(ip);
+  if (!seen || Date.now() - seen.first > ATTEMPT_WINDOW_MS) return false;
+  return seen.count >= MAX_ATTEMPTS;
+}
+
+function recordAttempt(ip) {
+  const seen = attempts.get(ip);
+  if (!seen || Date.now() - seen.first > ATTEMPT_WINDOW_MS) return attempts.set(ip, { first: Date.now(), count: 1 });
+  seen.count += 1;
+}
+
+function passwordMatches(record, password) {
+  // Compared in constant time, and both sides hashed so a wrong name and a wrong password
+  // take the same work — otherwise the timing says which names exist.
+  const expected = Buffer.from(record.hash, 'hex');
+  const given = crypto.scryptSync(password, record.salt, expected.length);
+  return crypto.timingSafeEqual(given, expected);
+}
+
 function presentedToken(req) {
   const header = req.get('authorization') || '';
   if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
@@ -176,6 +221,24 @@ function authorized(req) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Not under /api, because this is how you get the thing /api asks for.
+app.post('/login', (req, res) => {
+  const ip = req.ip || 'unknown';
+  if (tooManyAttempts(ip)) {
+    return res.status(429).json({ error: 'Too many tries. Wait fifteen minutes.' });
+  }
+  const name = String(req.body?.username || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  const record = USERS.get(name);
+  if (!record || !password || !passwordMatches(record, password)) {
+    recordAttempt(ip);
+    // One message for both, so a stranger cannot learn which names are real.
+    return res.status(401).json({ error: 'That name and password do not match.' });
+  }
+  attempts.delete(ip);
+  res.json({ token: ACCESS_TOKEN });
+});
 
 app.use('/api', (req, res, next) => {
   if (authorized(req)) return next();

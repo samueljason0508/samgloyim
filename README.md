@@ -93,7 +93,18 @@ server share a machine. On a real phone `localhost` is the phone, so it has to b
 to look: either the machine's address on the same network (`10.0.0.5:5100`) or a public
 `https://` one.
 
-Every `/api` route requires an access token. The backend mints one on first run, keeps it at
+Every `/api` route requires an access token. The app does not ask you to type it: **Import ›
+Sync server** takes a name and a password, `POST /login` trades them for the token, and only the
+token is kept, in the keychain. Who may sign in comes from `BACKEND_USERS`, a comma-separated
+list of `name:salt:scryptHash` — never a password, so neither the environment nor a log can leak
+one. Add someone with:
+
+    node -e "const c=require('crypto'),s=c.randomBytes(16).toString('hex');console.log(`NAME:${s}:${c.scryptSync(process.argv[1],s,32).toString('hex')}`)" 'their password'
+
+Guessing is throttled to eight tries per address every fifteen minutes. `node backend/test-login.js`
+exercises the whole of it against a throwaway user.
+
+The token itself still exists underneath. The backend mints one on first run, keeps it at
 `backend/data/access-token.txt`, and prints it when it starts; paste that into the app. Set
 `BACKEND_ACCESS_TOKEN` to supply your own instead, and change it to revoke a device.
 
