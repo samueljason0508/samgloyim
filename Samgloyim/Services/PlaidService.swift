@@ -49,14 +49,36 @@ struct PlaidSync {
     var added: [PlaidTransactionPayload] = []
     var modified: [PlaidTransactionPayload] = []
     var removed: [String] = []
+    /// One entry per linked bank. A sync that brought nothing and a sync where two banks
+    /// failed look identical in the rows alone.
+    var status: [PlaidItemStatus] = []
     var isEmpty: Bool { added.isEmpty && modified.isEmpty && removed.isEmpty }
+    var troubled: [PlaidItemStatus] { status.filter { !$0.ok } }
+}
+
+/// How one bank's own sync went. Older backends do not send this, so everything is optional
+/// and an absent status means "nothing to report", not "broken".
+struct PlaidItemStatus: Decodable, Identifiable {
+    var itemId: String
+    var institutionName: String
+    var ok: Bool
+    var needsReauth: Bool?
+    var error: String?
+    var lastSyncedAt: String?
+    var id: String { itemId }
+    /// The only failure the user can do anything about, and the only one worth a button.
+    var wantsSignIn: Bool { !ok && needsReauth == true }
 }
 
 struct PlaidLinkedItem: Decodable, Identifiable {
     var itemId: String
     var institutionName: String
     var linkedAt: String
+    /// Written by the backend on every successful sync; absent until this bank has had one.
+    var lastSyncedAt: String?
+    var lastError: String?
     var id: String { itemId }
+    var needsSignIn: Bool { lastError == "ITEM_LOGIN_REQUIRED" }
 }
 
 private struct SyncResponse: Decodable {
@@ -64,6 +86,7 @@ private struct SyncResponse: Decodable {
     var added: [PlaidTransactionPayload]
     var modified: [PlaidTransactionPayload]
     var removed: [String]
+    var status: [PlaidItemStatus]?
 }
 
 /// Talks to the local samgloyim backend (backend/server.js), which holds the Plaid
@@ -206,7 +229,7 @@ enum PlaidService {
         let (data, response) = try await URLSession.shared.data(for: request("api/transactions"))
         try validate(response)
         let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
-        return PlaidSync(accounts: decoded.accounts, added: decoded.added, modified: decoded.modified, removed: decoded.removed)
+        return PlaidSync(accounts: decoded.accounts, added: decoded.added, modified: decoded.modified, removed: decoded.removed, status: decoded.status ?? [])
     }
 
     static func post(_ path: String, body: [String: String]) async throws -> Data {

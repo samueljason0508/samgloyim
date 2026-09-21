@@ -114,6 +114,34 @@ final class FinanceStore: ObservableObject {
         account.openingBalance + data.transactions.filter { $0.accountID == account.id }.reduce(0) { $0 + ($1.kind == .income ? $1.amount : -$1.amount) }
     }
 
+    /// What the cards owe and what the accounts hold, across every account at once.
+    ///
+    /// Six accounts make the one number a person actually wants — am I ahead or behind — the one
+    /// number nowhere on screen. `balance` runs negative on a card as it is spent, so what is owed
+    /// is that balance turned around; a card in credit owes nothing rather than owing a negative.
+    struct Standing {
+        var owed: Int = 0
+        var held: Int = 0
+        var cards: [(account: BankAccount, owed: Int)] = []
+        var net: Int { held - owed }
+    }
+
+    var standing: Standing {
+        var result = Standing()
+        for account in data.accounts {
+            let balance = balance(account)
+            if account.isCreditCard == true {
+                let owed = max(0, -balance)
+                result.owed += owed
+                result.cards.append((account, owed))
+            } else {
+                result.held += balance
+            }
+        }
+        result.cards.sort { $0.owed > $1.owed }
+        return result
+    }
+
     @discardableResult
     private func update(_ mutation: (inout FinanceData) -> Void) -> Bool {
         guard canWrite else {
@@ -173,6 +201,40 @@ final class FinanceStore: ObservableObject {
             else { data.accounts.append(account) }
         }
     }
+    /// Folds one account into another, transactions and all.
+    ///
+    /// A bank reported under two names — an old link and a new one, or the same card seen twice —
+    /// leaves every per-account total and the account filter quietly wrong, and there is no way
+    /// back from inside the app. The target keeps its own name, rates and identity: it is the one
+    /// the user chose to keep. Opening balances add, because both were real money.
+    @discardableResult func mergeAccount(_ source: UUID, into target: UUID) -> Bool {
+        guard source != target, account(source) != nil, account(target) != nil else { return false }
+        let result = update { data in
+            guard let sourceIndex = data.accounts.firstIndex(where: { $0.id == source }),
+                  let targetIndex = data.accounts.firstIndex(where: { $0.id == target }) else { return }
+            let absorbed = data.accounts[sourceIndex]
+            for index in data.transactions.indices where data.transactions[index].accountID == source {
+                data.transactions[index].accountID = target
+            }
+            data.accounts[targetIndex].openingBalance += absorbed.openingBalance
+            // Rates only exist where someone looked them up; an empty target should inherit rather
+            // than lose them, and a target that has its own keeps them.
+            if (data.accounts[targetIndex].rewards ?? []).isEmpty, let inherited = absorbed.rewards, !inherited.isEmpty {
+                data.accounts[targetIndex].rewards = inherited
+            }
+            if data.accounts[targetIndex].officialName == nil { data.accounts[targetIndex].officialName = absorbed.officialName }
+            if data.accounts[targetIndex].mask == nil { data.accounts[targetIndex].mask = absorbed.mask }
+            if data.accounts[targetIndex].isCreditCard == nil { data.accounts[targetIndex].isCreditCard = absorbed.isCreditCard }
+            // The institution is how a sync finds this account again. Keeping the absorbed one
+            // when the target has none is what stops the next sync reopening what was just merged.
+            if data.accounts[targetIndex].institution == nil { data.accounts[targetIndex].institution = absorbed.institution }
+            data.accounts.remove(at: sourceIndex)
+        }
+        // Filtering by an account that no longer exists shows an empty month, not an error.
+        if result, selectedAccountID == source { selectedAccountID = target }
+        return result
+    }
+
     @discardableResult func setName(_ name: String) -> Bool { update { $0.name = name.isEmpty ? "friend" : name } }
     @discardableResult func reset(useDemo: Bool) -> Bool {
         let result = update { $0 = useDemo ? .sample() : .empty() }

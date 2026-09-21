@@ -25,6 +25,7 @@ struct OverviewView: View {
                     Image(systemName: "leaf").font(.system(size: 37, weight: .ultraLight)).rotationEffect(.degrees(-25)).foregroundStyle(Palette.forest).padding(.bottom, 9).padding(.trailing, 8)
                 }
                 VStack(spacing: 12) { MonthSelector(); AccountFilter() }
+                standingCard
                 spendingCard
                 // Location is only ever asked for on a tap, so this is safe to show everywhere.
                 BestCardHere()
@@ -72,6 +73,51 @@ struct OverviewView: View {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 17)).frame(width: 42, height: 42).background(.white, in: Circle()).overlay(Circle().stroke(Palette.line))
             }.accessibilityLabel("Settings")
         }.padding(.top, 9)
+    }
+
+    /// What is owed and what is held, across every account at once.
+    ///
+    /// The monthly total below answers "how much did I spend"; with six accounts, several of them
+    /// cards, the question that comes first is "where do I actually stand", and nothing answered
+    /// it. Cards only: a chequing balance is not a debt, and mixing them hides both.
+    @ViewBuilder private var standingCard: some View {
+        let standing = store.standing
+        if !standing.cards.isEmpty {
+            VStack(alignment: .leading, spacing: 13) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("OWED ON CARDS").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.4).foregroundStyle(Palette.muted)
+                        Text(Money.format(standing.owed)).font(.system(size: 27, weight: .regular, design: .serif))
+                            .accessibilityIdentifier("total-owed")
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("HELD").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1.4).foregroundStyle(Palette.muted)
+                        Text(Money.format(standing.held)).font(.system(size: 15, weight: .medium))
+                        Text(standing.net < 0 ? "\(Money.format(-standing.net)) short" : "\(Money.format(standing.net)) clear")
+                            .font(.system(size: 10)).foregroundStyle(standing.net < 0 ? Palette.orange : Palette.forest)
+                    }
+                }
+                // Only the cards carrying something, because a paid-off card in the list is a row
+                // that says nothing and makes the ones that matter harder to find.
+                let carrying = standing.cards.filter { $0.owed > 0 }
+                if !carrying.isEmpty {
+                    VStack(spacing: 7) {
+                        ForEach(carrying, id: \.account.id) { card in
+                            HStack(spacing: 8) {
+                                Image(systemName: "creditcard.fill").font(.system(size: 10)).foregroundStyle(Palette.muted)
+                                Text(card.account.name).font(.system(size: 12))
+                                if let mask = card.account.mask {
+                                    Text("•• \(mask)").font(.system(size: 10, design: .monospaced)).foregroundStyle(Palette.muted)
+                                }
+                                Spacer()
+                                Text(Money.format(card.owed)).font(.system(size: 12, weight: .medium))
+                            }
+                        }
+                    }
+                }
+            }.pocketCard(padding: 16)
+        }
     }
 
     private var spendingCard: some View {

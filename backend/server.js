@@ -4,6 +4,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { syncAll } = require('./sync');
 const { Configuration, PlaidApi, PlaidEnvironments } = require('plaid');
 const { GoogleGenAI } = require('@google/genai');
 
@@ -293,7 +294,8 @@ app.post('/api/exchange_public_token', async (req, res) => {
 
 app.get('/api/items', async (req, res) => {
   const items = await loadItems();
-  res.json(items.map(({ itemId, institutionName, linkedAt }) => ({ itemId, institutionName, linkedAt })));
+  res.json(items.map(({ itemId, institutionName, linkedAt, lastSyncedAt, lastError }) =>
+    ({ itemId, institutionName, linkedAt, lastSyncedAt: lastSyncedAt || null, lastError: lastError || null })));
 });
 
 app.delete('/api/items/:itemId', async (req, res) => {
@@ -309,37 +311,48 @@ app.delete('/api/items/:itemId', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Everything Plaid has to say about one item, paged to the end. Whatever this throws,
+// syncAll records against that bank alone.
+async function syncOneItem(item) {
+  const accounts = [];
+  const added = [];
+  const modified = [];
+  const removed = [];
+  let cursor = item.cursor || undefined;
+  let hasMore = true;
+  while (hasMore) {
+    const resp = await client.transactionsSync({ access_token: item.accessToken, cursor });
+    for (const account of resp.data.accounts.map((a) => normalizeAccount(a, item.institutionName))) {
+      if (!accounts.some((existing) => existing.accountId === account.accountId)) accounts.push(account);
+    }
+    added.push(...resp.data.added.map((t) => normalize(t, item.institutionName)));
+    modified.push(...resp.data.modified.map((t) => normalize(t, item.institutionName)));
+    removed.push(...resp.data.removed.map((t) => t.transaction_id));
+    cursor = resp.data.next_cursor;
+    hasMore = resp.data.has_more;
+  }
+  return { accounts, added, modified, removed, cursor };
+}
+
 app.get('/api/transactions', async (req, res) => {
   try {
     const items = await loadItems();
-    if (items.length === 0) return res.json({ accounts: [], added: [], modified: [], removed: [] });
+    if (items.length === 0) return res.json({ accounts: [], added: [], modified: [], removed: [], status: [] });
 
-    let added = [];
-    let modified = [];
-    let removed = [];
-    let accounts = [];
-    const updatedItems = [];
-
-    for (const item of items) {
-      let cursor = item.cursor || undefined;
-      let hasMore = true;
-      while (hasMore) {
-        const resp = await client.transactionsSync({ access_token: item.accessToken, cursor });
-        for (const account of resp.data.accounts.map((a) => normalizeAccount(a, item.institutionName))) {
-          if (!accounts.some((existing) => existing.accountId === account.accountId)) accounts.push(account);
-        }
-        added = added.concat(resp.data.added.map((t) => normalize(t, item.institutionName)));
-        modified = modified.concat(resp.data.modified.map((t) => normalize(t, item.institutionName)));
-        removed = removed.concat(resp.data.removed.map((t) => t.transaction_id));
-        cursor = resp.data.next_cursor;
-        hasMore = resp.data.has_more;
-      }
-      updatedItems.push({ ...item, cursor });
+    const result = await syncAll(items, syncOneItem);
+    await saveItems(result.updated);
+    for (const bank of result.status.filter((s) => !s.ok)) {
+      console.error(`sync failed for ${bank.institutionName}: ${bank.error}`);
     }
-
-    await saveItems(updatedItems);
-    res.json({ accounts, added, modified, removed });
+    res.json({
+      accounts: result.accounts,
+      added: result.added,
+      modified: result.modified,
+      removed: result.removed,
+      status: result.status,
+    });
   } catch (err) {
+    // Only reachable if the store itself is unreadable: a bank's own failure never lands here.
     console.error(err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to sync transactions' });
   }

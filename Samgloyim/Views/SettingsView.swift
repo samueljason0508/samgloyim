@@ -23,6 +23,8 @@ struct SettingsView: View {
     @State private var exportDocument = CSVDocument(text: "")
     @State private var linkedBanks: [PlaidLinkedItem] = []
     @State private var disconnectError: String?
+    /// The account waiting to be folded into another one.
+    @State private var mergeSource: BankAccount?
     enum ResetAction: String, Identifiable { case empty, demo; var id: String { rawValue } }
 
     var body: some View {
@@ -45,6 +47,15 @@ struct SettingsView: View {
                                 Text(Money.format(store.balance(account))).font(.system(size: 13, weight: .medium))
                             }.padding(.vertical, 5)
                         }.buttonStyle(.plain)
+                        // Two accounts for one card — an old link beside a new one — make every
+                        // per-account total wrong, and nothing else in the app can put that right.
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if store.data.accounts.count > 1 {
+                                Button { mergeSource = account } label: { Label("Merge", systemImage: "arrow.triangle.merge") }
+                                    .tint(Palette.orange)
+                                    .accessibilityIdentifier("merge-account")
+                            }
+                        }
                     }
                     Button { accountRequest = AccountRequest(account: nil) } label: { Label("Add account", systemImage: "plus") }.accessibilityIdentifier("add-account")
                 } header: { Text("Your accounts") } footer: { Text("Tracked balances = opening balance + all recorded income − all recorded expenses. These aren’t live bank balances.") }
@@ -52,16 +63,20 @@ struct SettingsView: View {
                     Section {
                         ForEach(linkedBanks) { item in
                             HStack(spacing: 12) {
-                                Image(systemName: "building.columns.fill").frame(width: 32).foregroundStyle(Palette.forest)
+                                Image(systemName: item.needsSignIn ? "exclamationmark.triangle.fill" : "building.columns.fill")
+                                    .frame(width: 32).foregroundStyle(item.needsSignIn ? Palette.orange : Palette.forest)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(item.institutionName).font(.system(size: 15, weight: .medium))
-                                    Text("Read-only · connected \(formattedDate(item.linkedAt))").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                                    Text(syncLine(item))
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(item.needsSignIn ? Palette.orange : Palette.muted)
+                                        .accessibilityIdentifier("bank-sync-state")
                                 }
                                 Spacer()
                                 Button(role: .destructive) { Task { await disconnect(item) } } label: { Image(systemName: "trash") }
                             }.padding(.vertical, 5)
                         }
-                    } header: { Text("Connected banks") } footer: { Text("Connections are read-only: this app can only see transactions, never move money. Disconnecting revokes access immediately.") }
+                    } header: { Text("Connected banks") } footer: { Text("Connections are read-only: this app can only see transactions, never move money. Disconnecting revokes access immediately. A bank asking you to sign in again keeps its place in the queue — the others still sync meanwhile.") }
                 }
                 Section("Your data") {
                     Button {
@@ -90,6 +105,16 @@ struct SettingsView: View {
                 }
                 .alert("Export couldn’t finish", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) { Button("OK") { exportError = nil } } message: { Text(exportError ?? "Try again.") }
                 .alert("Couldn’t disconnect", isPresented: Binding(get: { disconnectError != nil }, set: { if !$0 { disconnectError = nil } })) { Button("OK") { disconnectError = nil } } message: { Text(disconnectError ?? "Try again.") }
+                .confirmationDialog("Merge \(mergeSource?.name ?? "this account") into…",
+                                    isPresented: Binding(get: { mergeSource != nil }, set: { if !$0 { mergeSource = nil } }),
+                                    titleVisibility: .visible, presenting: mergeSource) { source in
+                    ForEach(store.data.accounts.filter { $0.id != source.id }) { target in
+                        Button(target.name) { store.mergeAccount(source.id, into: target.id); mergeSource = nil }
+                    }
+                    Button("Cancel", role: .cancel) { mergeSource = nil }
+                } message: { source in
+                    Text("Every transaction in \(source.name) moves across and \(source.name) is removed. Balances add up. This can’t be undone.")
+                }
                 .task { await loadLinkedBanks() }
         }
     }
@@ -103,6 +128,23 @@ struct SettingsView: View {
         do { try await PlaidService.disconnectItem(item.itemId); await loadLinkedBanks() }
         catch { disconnectError = error.localizedDescription }
     }
+    /// What this bank is doing, in the order the user cares about: what is broken, then how
+    /// current it is, then — only if it has never synced — when it was connected.
+    ///
+    /// ponytail: re-authenticating means disconnect and reconnect. Plaid's update mode would
+    /// spare that round trip; it needs a link token minted against the existing item.
+    private func syncLine(_ item: PlaidLinkedItem) -> String {
+        if item.needsSignIn { return "Needs you to sign in again — disconnect and reconnect it" }
+        if let last = item.lastSyncedAt { return "Read-only · synced \(formattedAgo(last))" }
+        if item.lastError != nil { return "Read-only · last sync didn’t go through" }
+        return "Read-only · connected \(formattedDate(item.linkedAt))"
+    }
+
+    /// A sync is judged by how stale it is, not by what date it happened on.
+    private func formattedAgo(_ iso: String) -> String {
+        ISO8601DateFormatter().date(from: iso).map { $0.formatted(.relative(presentation: .named)) } ?? "recently"
+    }
+
     private func formattedDate(_ iso: String) -> String {
         ISO8601DateFormatter().date(from: iso).map { $0.formatted(.dateTime.month(.abbreviated).day().year()) } ?? "recently"
     }
@@ -117,6 +159,9 @@ struct AccountEditor: View {
     @State private var opening = "0.00"
     @State private var symbol = "building.columns.fill"
     @State private var rewards: [RewardRate] = []
+    /// Only a sync ever set this before, so a card carried by hand could never be counted as
+    /// one — no rates, and nothing owed on it anywhere in the app.
+    @State private var isCard = false
     @State private var lookingUp = false
     @State private var lookupError: String?
     private var nameAvailable: Bool { !store.data.accounts.contains { $0.id != account?.id && $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame } }
@@ -132,11 +177,12 @@ struct AccountEditor: View {
                         Label("Card", systemImage: "creditcard.fill").tag("creditcard.fill")
                         Label("Cash", systemImage: "banknote.fill").tag("banknote.fill")
                     }
+                    Toggle("This is a credit card", isOn: $isCard).accessibilityIdentifier("account-is-card")
                 }
                 Section {
                     HStack { Text("$"); TextField("Opening balance", text: $opening).keyboardType(.numbersAndPunctuation).accessibilityIdentifier("account-balance") }
                 } header: { Text("Opening balance") } footer: { Text("Enter the balance before your earliest recorded transaction. Tracked balances then add income and subtract expenses. A negative opening balance is allowed.") }
-                if account?.isCreditCard == true || !rewards.isEmpty { rewardsSection }
+                if isCard || !rewards.isEmpty { rewardsSection }
                 if !nameAvailable { Text("Choose a unique account name so CSV imports can match it correctly.").foregroundStyle(Palette.orange) }
             }.scrollContentBackground(.hidden).pageBackground().navigationTitle(account == nil ? "Add an account" : "Edit account").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -151,10 +197,11 @@ struct AccountEditor: View {
                         updated.symbol = symbol
                         updated.openingBalance = cents
                         updated.rewards = rewards.isEmpty ? nil : rewards
+                        updated.isCreditCard = isCard
                         if store.saveAccount(updated) { dismiss() }
                     }.disabled(!valid).accessibilityIdentifier("save-account") }
                 }
-                .onAppear { if let account { name = account.name; detail = account.detail; opening = Money.input(account.openingBalance); symbol = account.symbol; rewards = account.rewards ?? [] } }
+                .onAppear { if let account { name = account.name; detail = account.detail; opening = Money.input(account.openingBalance); symbol = account.symbol; rewards = account.rewards ?? []; isCard = account.isCreditCard == true || account.symbol == "creditcard.fill" } }
         }
     }
 

@@ -615,6 +615,93 @@ final class FinanceTests: XCTestCase {
         XCTAssertFalse(missing.contains("access token"), "A 500 is not a token problem: \(missing)")
     }
 
+    @MainActor func testWhatYouOweAddsUpAcrossEveryCard() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        let checking = try XCTUnwrap(store.data.accounts.first)
+        var amex = BankAccount(name: "Amex", detail: "Gold"); amex.isCreditCard = true
+        var discover = BankAccount(name: "Discover", detail: "It"); discover.isCreditCard = true
+        var paidOff = BankAccount(name: "Chase", detail: "Freedom", openingBalance: 5_000); paidOff.isCreditCard = true
+        XCTAssertTrue(store.saveAccount(amex))
+        XCTAssertTrue(store.saveAccount(discover))
+        XCTAssertTrue(store.saveAccount(paidOff))
+        XCTAssertTrue(store.add([
+            Transaction(merchant: "Payday", amount: 120_000, date: Date(), category: .other, accountID: checking.id, kind: .income),
+            Transaction(merchant: "FOOD LION", amount: 5_500, date: Date(), category: .groceries, accountID: amex.id),
+            Transaction(merchant: "DON DON", amount: 1_298, date: Date(), category: .food, accountID: discover.id),
+        ]))
+
+        let standing = store.standing
+        XCTAssertEqual(standing.owed, 6_798, "every card's balance counts towards what is owed")
+        XCTAssertEqual(standing.held, 120_000, "and the cash accounts are counted apart from them")
+        XCTAssertEqual(standing.net, 113_202)
+        XCTAssertEqual(standing.cards.first?.account.id, amex.id, "the biggest debt is named first")
+        // A card in credit owes nothing. Counting it as a negative debt would quietly pay down
+        // the others and understate the total.
+        XCTAssertEqual(standing.cards.first(where: { $0.account.id == paidOff.id })?.owed, 0)
+    }
+
+    @MainActor func testMergingTwoAccountsMovesEverythingAndLosesNothing() throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let store = FinanceStore(fileURL: url, demo: false)
+        var keep = BankAccount(name: "Amex", detail: "Gold", openingBalance: 10_000)
+        keep.institution = "American Express"
+        var stray = BankAccount(name: "Amex (old)", detail: "Gold", openingBalance: 2_500)
+        stray.rewards = [RewardRate(category: .groceries, basisPoints: 400)]
+        stray.officialName = "American Express® Gold Card"
+        stray.mask = "1009"
+        stray.isCreditCard = true
+        XCTAssertTrue(store.saveAccount(keep))
+        XCTAssertTrue(store.saveAccount(stray))
+        XCTAssertTrue(store.add([
+            Transaction(merchant: "FOOD LION", amount: 2_200, date: Date(), category: .groceries, accountID: stray.id),
+            Transaction(merchant: "DON DON", amount: 1_298, date: Date(), category: .food, accountID: keep.id),
+        ]))
+        let before = store.balance(keep) + store.balance(stray)
+
+        XCTAssertTrue(store.mergeAccount(stray.id, into: keep.id))
+
+        XCTAssertNil(store.account(stray.id), "the absorbed account is gone")
+        let merged = try XCTUnwrap(store.account(keep.id))
+        XCTAssertEqual(store.data.transactions.filter { $0.accountID == stray.id }.count, 0, "no transaction is orphaned")
+        XCTAssertEqual(store.data.transactions.filter { $0.accountID == keep.id }.count, 2)
+        XCTAssertEqual(store.balance(merged), before, "money is neither invented nor lost by merging")
+        XCTAssertEqual(merged.name, "Amex", "the account kept is the one the user chose")
+        XCTAssertEqual(merged.rewards?.count, 1, "rates the target never had are inherited, not dropped")
+        XCTAssertEqual(merged.mask, "1009")
+        XCTAssertEqual(merged.institution, "American Express", "the target's own institution wins, so a sync still finds it")
+
+        XCTAssertFalse(store.mergeAccount(keep.id, into: keep.id), "an account cannot swallow itself")
+        XCTAssertFalse(store.mergeAccount(UUID(), into: keep.id), "and neither can one that isn’t there")
+    }
+
+    func testOneBankInTroubleIsReportedWithoutSpeakingForTheRest() throws {
+        // The backend now says how each bank's own sync went. An older backend says nothing,
+        // and silence has to keep meaning "nothing to report".
+        let decoded = try JSONDecoder().decode([PlaidItemStatus].self, from: Data("""
+        [{"itemId":"b","institutionName":"Chime","ok":false,"needsReauth":true,"error":"ITEM_LOGIN_REQUIRED"}]
+        """.utf8))
+        XCTAssertTrue(decoded[0].wantsSignIn, "a bank asking for a sign-in should offer that, and only that")
+
+        // A failure the user cannot fix must not be dressed up as one they can.
+        let outage = try JSONDecoder().decode(PlaidItemStatus.self, from: Data("""
+        {"itemId":"c","institutionName":"Amex","ok":false,"error":"SYNC_FAILED"}
+        """.utf8))
+        XCTAssertFalse(outage.wantsSignIn)
+
+        let stale = try JSONDecoder().decode(PlaidLinkedItem.self, from: Data("""
+        {"itemId":"b","institutionName":"Chime","linkedAt":"2026-05-01T00:00:00Z","lastError":"ITEM_LOGIN_REQUIRED"}
+        """.utf8))
+        XCTAssertTrue(stale.needsSignIn)
+        let healthy = try JSONDecoder().decode(PlaidLinkedItem.self, from: Data("""
+        {"itemId":"a","institutionName":"PNC","linkedAt":"2026-05-01T00:00:00Z"}
+        """.utf8))
+        XCTAssertFalse(healthy.needsSignIn, "a bank that has never failed is not asking for anything")
+        XCTAssertNil(healthy.lastSyncedAt, "and a save from before this existed still decodes")
+    }
+
     func testReceiptMatchesCardPurchaseOnExactTotal() throws {
         let account = UUID()
         let day = try XCTUnwrap(CSVService.parseDate("2026-09-18"))
